@@ -1228,6 +1228,7 @@ class TitleScene extends Phaser.Scene {
     this.add.bitmapText(W / 2, 74, 'font', 'A CAT PLATFORMER').setOrigin(0.5).setTint(0x6b4a2a);
     const isTouch = this.sys.game.device.input.touch;
     this.prompt = this.add.bitmapText(W / 2, 112, 'font', isTouch ? 'TAP TO START' : 'PRESS ANY KEY').setOrigin(0.5).setTint(0x3a2414);
+    this.add.bitmapText(W - 3, 3, 'font', 'BUILD ' + (window.BUILD || '?')).setOrigin(1, 0).setTint(0x6b4a2a);
 
     // cats parade across the bottom
     this.cats = [];
