@@ -672,7 +672,7 @@ const Sprites = (() => {
   // ------------------------------------------------------------------------
   // World 1 tileset (16x16). Index order matters: see TILE below.
   // ------------------------------------------------------------------------
-  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7, KITCHEN: 8, COUCH_L: 9, COUCH_M: 10, COUCH_R: 11, RUG: 12 };
+  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7, KITCHEN: 8, COUCH_L: 9, COUCH_M: 10, COUCH_R: 11, RUG: 12, WATER: 13, DECOR: 14, BLOCK: 15 };
 
   const TILE_PAL = [
     '#4a2f1a', // 0 dark seam
@@ -703,6 +703,14 @@ const Sprites = (() => {
     '#7a2020', // p couch dark
     '#b03030', // q rug
     '#e8d0a0', // r rug border
+    '#5fa04a', // s grass
+    '#8fc85a', // t grass light
+    '#6b4a2a', // u dirt
+    '#3a6fbf', // v water
+    '#7fb0ff', // w water light
+    '#6a6a72', // x asphalt / steel
+    '#8a8a94', // y asphalt light
+    '#3a3a44', // z dark
   ];
 
   const T_FLOOR_TOP = [
@@ -866,8 +874,53 @@ const Sprites = (() => {
   const T_COUCH_R = T_COUCH_M.map((r, i) => (i >= 1 && i <= 12 ? r.slice(0, 12) + 'ooop' : r));
   const T_RUG = ['qqqqqqqqqqqqqqqq', 'qrrrrrrrrrrrrrrq', 'qrqqqqqqqqqqqqrq', 'qrrrrrrrrrrrrrrq', 'qqqqqqqqqqqqqqqq'].concat(T_FLOOR_TOP.slice(5));
 
+  const T_WATER = [
+    'wvwwvwwvwwvwwvwv', 'vvvvvvvvvvvvvvvv', 'vvvwvvvvwvvvvwvv', 'vvvvvvvvvvvvvvvv',
+    'vvvvvvvvvvvvvvvv', 'vvwvvvvwvvvvwvvv', 'vvvvvvvvvvvvvvvv', 'vvvvvvvvvvvvvvvv',
+    'vvvvvvvvvvvvvvvv', 'vvvvwvvvvwvvvvwv', 'vvvvvvvvvvvvvvvv', 'vvvvvvvvvvvvvvvv',
+    'vvvvvvvvvvvvvvvv', 'vvvvvvvvvvvvvvvv', 'vvvvvvvvvvvvvvvv', 'vvvvvvvvvvvvvvvv',
+  ];
+  const ROW = (a, b, c) => a + b.repeat(14) + c;
+  // World 2 backyard: grass over dirt, tree-branch shelves, picket fence decor, flowerpot block
+  const W2_TOP = ['tttttttttttttttt', 'ssttsstttssttsst', 'ssssssssssssssss', 'sususususususuus'].concat(Array(12).fill('uuuuuuuuuuuuuuuu')).map((r, i) => (i === 7 || i === 12 ? 'uu0uuuuuu0uuuuuu' : r));
+  const W2_FILL = Array(16).fill('uuuuuuuuuuuuuuuu').map((r, i) => (i % 5 === 2 ? 'uuuu0uuuuuuu0uuu' : r));
+  const W2_SHELF = ['s.ss..ss.s..ss..', 'sssstssstsssssss', '1122112211221122', '0000000000000000', '......0...0.....', '......0....0....'].concat(Array(10).fill('................'));
+  const W2_DECOR = ['....22......22..', '...2222....2222.', '...2332....2332.', '...2222....2222.', '...2222....2222.', '2222222222222222', '...2222....2222.', '...2222....2222.', '...2222....2222.', '2222222222222222', '...2222....2222.', '...2222....2222.', '...2222....2222.', '...2222....2222.', '...2222....2222.', '...2222....2222.'];
+  const W2_BLOCK = ['0000000000000000', '0ssssssssssssss0', '0s6666666666666s'.slice(0, 15) + '0', '0666666666666660', '0555555555555550', '.05555555555550.', '.05555555555550.', '.05555555555550.', '.05444444444450.', '.05555555555550.', '.05555555555550.', '.05555555555550.', '..055555555550..', '..055555555550..', '..044444444440..', '...0000000000...'];
+  // World 3 alley (night): sidewalk over dark brick, fire-escape grates, awning decor, dumpster block
+  const W3_TOP = ['yyyyyyyyyyyyyyyy', 'xxxxxxxxxxxxxxxx', 'xxxxxxx0xxxxxxxx', 'zzzzzzzzzzzzzzzz'].concat(Array(12).fill('z44z44z44z44z44z').map((r, i) => (i % 2 ? '44z44z44z44z44z4' : r)));
+  const W3_FILL = Array(16).fill('z44z44z44z44z44z').map((r, i) => (i % 2 ? '44z44z44z44z44z4' : r));
+  const W3_SHELF = ['xyxyxyxyxyxyxyxy', 'yxyxyxyxyxyxyxyx', 'xxxxxxxxxxxxxxxx', 'zzzzzzzzzzzzzzzz', '..z..........z..', '..z..........z..', '..z..........z..', '..z..........z..'].concat(Array(8).fill('................'));
+  const W3_DECOR = ['dddddddddddddddd', 'ccddccddccddccdd', 'ccddccddccddccdd', 'ccddccddccddccdd', 'ccddccddccddccdd', 'ccddccddccddccdd', 'ccddccddccddccdd', 'c..c..c..c..c..c'].concat(Array(8).fill('................'));
+  const W3_BLOCK = ['0000000000000000', '0zzzzzzzzzzzzzz0', '0000000000000000', '0ssssssssssssss0', '0ssssssssssssss0', '0ss0ssssssss0ss0', '0ssssssssssssss0', '0ssssssssssssss0', '0ssssssssssssss0', '0ss0ssssssss0ss0', '0ssssssssssssss0', '0ssssssssssssss0', '0ssssssssssssss0', '0000000000000000', '.zz..........zz.', '.zz..........zz.'];
+  // World 4 vet clinic: teal tile over gray, cone-of-shame platforms, cabinet decor, steel table block
+  const W4_TOP = ['hhhhhhhhhhhhhhhh', 'ggggggggggggggg0', 'ggggggggggggggg0', '0000000000000000'].concat(Array(12).fill('yyyyyyyyyyyyyyyy').map((r, i) => (i % 4 === 1 ? 'yyyyyyy0yyyyyyyy' : r)));
+  const W4_FILL = Array(16).fill('yyyyyyyyyyyyyyyy').map((r, i) => (i % 4 === 1 ? 'yyyyyyy0yyyyyyyy' : r));
+  const W4_SHELF = ['kkkkkkkkkkkkkkkk', 'kmmmmmmmmmmmmmmk', 'kkkkkkkkkkkkkkkk', '0000000000000000', '..0kkkkkkkkkk0..', '...0kkkkkkkk0...', '....0kkkkkk0....', '.....0kkkk0.....', '......0000......'].concat(Array(7).fill('................'));
+  const W4_DECOR = ['0000000000000000', '0kkkkkkkkkkkkkk0', '0kkkkkkkkkkkkkk0', '0kkkkk0kkkkkkkk0', '0kkkkkkkkkkkkkk0', '0000000000000000', '0kkkkkkkkkkkkkk0', '0kkkkkkkkkkkkkk0', '0kkkkk0kkkkkkkk0', '0kkkkkkkkkkkkkk0', '0000000000000000', '0kkkkkkkkkkkkkk0', '0kkkkkkkkkkkkkk0', '0kkkkk0kkkkkkkk0', '0kkkkkkkkkkkkkk0', '0000000000000000'];
+  const W4_BLOCK = ['xxxxxxxxxxxxxxxx', 'yyyyyyyyyyyyyyyy', 'xxxxxxxxxxxxxxxx', '0000000000000000', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..xx........xx..', '..00........00..'];
+  // World 5 rooftop cafe: concrete over brick, cafe-table platforms, railing decor, chimney block
+  const W5_TOP = ['yyyyyyyyyyyyyyyy', 'xxxxxxxxxxxxxxxx', '0000000000000000', '4666466646664666'].concat(Array(12).fill('6664666466646664').map((r, i) => (i % 2 ? '4666466646664666' : r)));
+  const W5_FILL = Array(16).fill('6664666466646664').map((r, i) => (i % 2 ? '4666466646664666' : r));
+  const W5_SHELF = ['dddddddddddddddd', 'dccccccccccccccd', 'dddddddddddddddd', '0000000000000000', '.......00.......', '.......00.......', '.......00.......', '.......00.......', '.......00.......', '.......00.......', '.....000000.....'].concat(Array(5).fill('................'));
+  const W5_DECOR = ['3.3..3.3..3.3..3', '2323323233232332', '..3..3..3..3..3.', '................', '................', 'z..z..z..z..z..z', 'zzzzzzzzzzzzzzzz', 'z..z..z..z..z..z', 'z..z..z..z..z..z', 'z..z..z..z..z..z', 'z..z..z..z..z..z', 'zzzzzzzzzzzzzzzz', 'z..z..z..z..z..z', 'z..z..z..z..z..z', 'z..z..z..z..z..z', 'z..z..z..z..z..z'];
+  const W5_BLOCK = ['0000000000000000', '0444444444444440', '0000000000000000', '0666466646664660', '0646664666466640', '0666466646664660', '0646664666466640', '0666466646664660', '0646664666466640', '0666466646664660', '0646664666466640', '0666466646664660', '0646664666466640', '0666466646664660', '0646664666466440', '0000000000000000'];
+
+  const WORLD_TILES = {
+    1: { top: T_FLOOR_TOP, fill: T_FLOOR_FILL, shelf: T_SHELF, decor: T_CURTAIN, block: T_BRICK },
+    2: { top: W2_TOP, fill: W2_FILL, shelf: W2_SHELF, decor: W2_DECOR, block: W2_BLOCK },
+    3: { top: W3_TOP, fill: W3_FILL, shelf: W3_SHELF, decor: W3_DECOR, block: W3_BLOCK },
+    4: { top: W4_TOP, fill: W4_FILL, shelf: W4_SHELF, decor: W4_DECOR, block: W4_BLOCK },
+    5: { top: W5_TOP, fill: W5_FILL, shelf: W5_SHELF, decor: W5_DECOR, block: W5_BLOCK },
+  };
+
   function buildTiles() {
-    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG], TILE_PAL);
+    for (const w of Object.keys(WORLD_TILES)) {
+      const t = WORLD_TILES[w];
+      makeSprite('tiles-w' + w, [t.top, t.fill, t.shelf, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, t.decor, t.block], TILE_PAL);
+    }
+    // alias for anything still asking for 'tiles'
+    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, T_CURTAIN, T_BRICK], TILE_PAL);
   }
 
   // ------------------------------------------------------------------------
@@ -1122,6 +1175,98 @@ const Sprites = (() => {
 
     // Brick fragment 4x4
     makeSprite('brick-bit', [['0000', '0110', '0110', '0000']], ['#6b4a2a', '#c8955a']);
+
+    // Squirrel 16x16: idle0, idle1 (tail flick), hurt
+    const SQ0 = [
+      '..........00....', '.........0110...', '.........0110...', '....000..01110..', '...01110001110..', '..0111111101110.', '..0122111110110.',
+      '..0111111111110.', '..0113111111110.', '...01111111110..', '....0111111110..', '....0111111110..', '.....011..0110..', '.....000..000...', '................', '................',
+    ];
+    const SQ1 = SQ0.map((r, i) => (i === 0 ? '.........00.....' : i === 1 ? '........0110....' : r));
+    const SQH = SQ0.map((r, i) => (i === 6 ? '..0100111110110.' : r));
+    makeSprite('squirrel', [SQ0, SQ1, SQH], ['#4a2a10', '#a86a3a', '#d09a5a', '#101010'], { width: 16, height: 16, align: 'bottom' });
+    makeSprite('acorn', [['..00..', '.0220.', '011110', '011110', '.0110.', '..00..']], ['#3a2010', '#8a5a2a', '#c8a050']);
+
+    // Sprinkler 16x16 (2 frames) + droplet 4x4
+    const SPK = [
+      '................', '................', '................', '................', '................', '................', '................', '.......11.......',
+      '......0110......', '......0110......', '......0110......', '....00011000....', '...0111111110...', '..011111111110..', '..011111111110..', '..000000000000..',
+    ];
+    const SPK1 = SPK.map((r, i) => (i === 6 ? '......2..2......' : i === 7 ? '.......11.......' : r));
+    makeSprite('sprinkler', [SPK, SPK1], ['#2a3a2a', '#5a7a5a', '#7fb0ff'], { width: 16, height: 16, align: 'bottom' });
+    makeSprite('droplet', [['.00.', '0110', '0110', '.00.']], ['#3a6fbf', '#9fd0ff']);
+
+    // Spray bottle 16x20 (2 frames: idle, squeeze) + water blob
+    const SPB = [
+      '......0000......', '.....011110.....', '....01111110....', '....0111111000..', '....011111111 0.'.replace(' ', '1'), '....0000000000..', '.....011110.....', '.....011110.....',
+      '....01111110....', '...0122222210...', '...0122222210...', '...0122222210...', '...0122222210...', '...0122222210...', '...0122222210...', '...0122222210...',
+      '...0122222210...', '...0111111110...', '....00000000....', '................',
+    ];
+    const SPB1 = SPB.map((r, i) => (i === 3 ? '....0111111110..' : i === 4 ? '....01111111110.' : r));
+    makeSprite('spray', [SPB, SPB1], ['#1a2a3a', '#4f8fe8', '#9fd0ff'], { width: 16, height: 20, align: 'bottom' });
+    makeSprite('blob', [['.00.', '0110', '0110', '.00.'], ['0000', '0110', '0110', '0000']], ['#3a6fbf', '#bfe0ff']);
+
+    // Dog 32x24: run cycle 4 frames
+    const dogFrame = (legA, legB) => [
+      '.........................00.....', '........................0110....', '....0000000000.........011110...', '...011111111110.......0111111 0.'.replace(' ', '1'), '..01111111111110.....01111132110',
+      '..01111111111110....011111111110', '..011111111111110000111111111100', '..0111111111111111111111111111..', '..0111111111111111111111111110..', '...01111111111111111111111110...',
+      '...011111111111111111111110.....', '....0111111111111111111110......', '....0111111111111111111110......', '.....01111111111111111110.......',
+    ].concat(Array(8).fill('....' + legA + '..........' + legB + '..')).concat(['................................', '................................']);
+    const L1 = '0110.011', L2 = '.011011.', L3 = '..0110..', L4 = '.011011.';
+    makeSprite('dog', [dogFrame(L1, L1), dogFrame(L2, L2), dogFrame(L3, L3), dogFrame(L4, L4)], ['#3a2414', '#a8763a', '#d8a860', '#101010'], { width: 32, height: 24, align: 'bottom' });
+
+    // Vacuum boss 32x32 (2 frames) + plug 10x8
+    const VAC = [
+      '..............000...............', '.............01110..............', '.............01110..............', '.............01110..............', '.............01110..............',
+      '.............01110..............', '............0111110.............', '...........011111110............', '..........01111111110...........', '.........0111111111110..........',
+      '........011111111111110.........', '.......01111111111111110........', '......0111122222221111110.......', '......0111122222221111110.......', '......0111111111111111110.......',
+      '......0111111111111111110.......', '......0111111111111111110.......', '......0111111111111111110.......', '......0111111111111111110.......', '......0111111111111111110.......',
+      '......0111111111111111110.......', '......0111111111111111110.......', '.....011111111111111111110......', '.....011111111111111111110......', '.....011111111111111111110......',
+      '.....011111111111111111110......', '.....000000000000000000000......', '.......033........033...........', '......0330........0330..........', '......0330........0330..........',
+      '.......00..........00...........', '................................',
+    ];
+    const VAC1 = VAC.map((r, i) => (i === 12 || i === 13 ? r.replace(/2/g, '4') : r));
+    makeSprite('vacuum', [VAC, VAC1], ['#2a2a30', '#8a2a3a', '#ff5a5a', '#3a3a44', '#ffd05a'], { width: 32, height: 32, align: 'bottom' });
+    makeSprite('plug', [['..0..0....', '..0..0....', '0000000000', '0111111110', '0111111110', '0111111110', '0000000000', '....00....']], ['#1a1a1a', '#e8e8e8']);
+
+    // Rubber duck 12x10 (2 frames) + drain plug 10x6 + bath tap 16x16
+    const DUCK = ['....000.....', '...02210....', '..0222213...', '..0222210...', '000222200...', '022222220...', '0222222220..', '.02222220...', '..000000....', '............'];
+    const DUCK1 = DUCK.map((r, i) => (i === 8 ? '.00000000...' : r));
+    makeSprite('duck', [DUCK, DUCK1], ['#7a5a10', '#f2c94c', '#ffe066', '#e8802a'], { width: 12, height: 10 });
+    makeSprite('drain', [['.00000000.', '0111111110', '0111111110', '0000000000', '....00....', '....00....']], ['#3a3a44', '#c8c8d0']);
+
+    // Powerups: cardboard box 16x14, laser pointer 12x8, yarn ball 10x10
+    makeSprite('box', [[
+      '0000000000000000', '0111111111111110', '0122222222222210', '0100000000000010', '0111111111111110', '0111111111111110', '0111111111111110', '0111112111211110',
+      '0111111111111110', '0111111111111110', '0111111111111110', '0111111111111110', '0111111111111110', '0000000000000000',
+    ]], ['#5a3a1a', '#c8955a', '#8a6a3a']);
+    makeSprite('laser', [['000000000...', '011111110...', '011111110.22', '000000000...', '............', '............', '............', '............']], ['#1a1a1a', '#8a8a92', '#ff2a2a']);
+    makeSprite('dot', [['.0.', '000', '.0.']], ['#ff2a2a']);
+    makeSprite('yarn', [['...0000...', '..011110..', '.01121110.', '0111121110', '0112111110', '0111112110', '0121111110', '.01111210.', '..011110..', '...0000...']], ['#7a1a1a', '#e03a3a', '#ff7a7a']);
+    makeSprite('string', [['0']], ['#e03a3a']);
+
+    // Cat flap door 16x32 + decor sprites: birdbath 16x24, neon sign 32x16, x-ray box 24x16, string lights 48x8
+    makeSprite('catflap', [[
+      '4444444444444444', '4000000000000004', '4022222222222204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204',
+      '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204',
+      '4021111111111204', '4021111111111204', '4021111111111204', '4021111111111204', '4020000000000204', '4025555555555204', '4025333333335204', '4025333333335204',
+      '4025333333335204', '4025333333335204', '4025333333335204', '4025333333335204', '4025555555555204', '4020000000000204', '4000000000000004', '4444444444444444',
+    ]], ['#3a2414', '#7a4a24', '#a3683a', '#e8dcc4', '#c9c1b0', '#5a3a1a']);
+    makeSprite('birdbath', [[
+      '................', '..000000000000..', '.01111111111110.', '.01222222222210.', '..000000000000..', '......0110......', '......0110......', '......0110......',
+      '......0110......', '......0110......', '......0110......', '......0110......', '.....011110.....', '....01111110....', '...0111111110...', '...0000000000...',
+    ]], ['#5a5a62', '#a8a8b0', '#7fb0ff'], { width: 16, height: 24, align: 'bottom' });
+    makeSprite('neon', [
+      ['00000000000000000000000000000000', '0..............................0', '0.1111.1111.1111..1111..1111...0', '0.1..1.1..1.1..1..1..1..1..1...0', '0.1111.1..1.1..1..1111..1111...0', '0.1..1.1..1.1..1..1..1..1..1...0', '0.1111.1111.1111..1..1..1..1...0', '0..............................0', '00000000000000000000000000000000'],
+      ['00000000000000000000000000000000', '0..............................0', '0.2222.2222.2222..2222..2222...0', '0.2..2.2..2.2..2..2..2..2..2...0', '0.2222.2..2.2..2..2222..2222...0', '0.2..2.2..2.2..2..2..2..2..2...0', '0.2222.2222.2222..2..2..2..2...0', '0..............................0', '00000000000000000000000000000000'],
+    ], ['#1a1030', '#ff4fd8', '#8f2a80']);
+    makeSprite('xray', [[
+      '000000000000000000000000', '011111111111111111111110', '011111222111112221111110', '011112222211122222111110', '011111222111112221111110', '011111121111111211111110', '011111111111111111111110', '011111121111111211111110',
+      '011111222111112221111110', '011112222211122222111110', '011111222111112221111110', '011111111111111111111110', '000000000000000000000000', '..........0000..........', '..........0000..........', '..........0000..........',
+    ]], ['#2a3a4a', '#9fd0ff', '#e8f4ff']);
+    makeSprite('lights', [
+      ['0..0..0..0..0..0..0..0..0..0..0..0..0..0..0..0..', '1..2..3..1..2..3..1..2..3..1..2..3..1..2..3..1..'],
+      ['0..0..0..0..0..0..0..0..0..0..0..0..0..0..0..0..', '3..1..2..3..1..2..3..1..2..3..1..2..3..1..2..3..'],
+    ], ['#3a3a44', '#ffd05a', '#ff6a8a', '#7fd0ff']);
 
     // Ghost mouse pickup 10x7 (Delia only)
     makeSprite('ghost-mouse', [

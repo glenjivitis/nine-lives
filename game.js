@@ -1,6 +1,7 @@
 // game.js — Nine Lives
-// Phase 4: full roster of eight cats with passives, powerups (tuna, catnip,
-// bell collar, fish), levels 1-1..1-4. All feel tunables live under PHYS.
+// Phase 5: worlds 2-5 (backyard, alley, vet clinic, rooftop cafe), squirrels,
+// sprinklers, spray bottles, the dog chase, the vacuum and bath bosses, box /
+// laser / yarn powerups, bonus level, finale. All feel tunables live under PHYS.
 
 const W = 320;
 const H = 180;
@@ -46,6 +47,12 @@ const PHYS = {
   yowlCooldown: 8,
   slideBoost: 1.5,
   rollHeight: 10,
+  chaseScroll: 62,
+  dogSpeed: 74,
+  vacuumPull: 130,
+  bathFillTime: 60,
+  yarnSpeed: 200,
+  laserRange: 160,
 };
 
 const HITBOX = { w: 20, h: 18 };
@@ -62,6 +69,7 @@ const GameState = {
   super: false,
   mice: {},           // level id -> [collected indices]
   bell: false,        // bell collar lasts the rest of the level
+  afterBonus: null,   // campaign level to resume after the bonus level
 };
 
 function resetRun(catKey) {
@@ -148,6 +156,15 @@ const Sfx = (() => {
     catnip() { [523, 659, 784, 659, 880, 1046].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.1, vol: 0.08, delay: i * 0.06 })); },
     bell()   { [1568, 2093].forEach((f, i) => tone({ type: 'triangle', f0: f, f1: f * 0.98, dur: 0.3, vol: 0.07, delay: i * 0.12 })); },
     crack()  { noise(0.12, 0.14, 900); tone({ f0: 180, f1: 90, dur: 0.12, vol: 0.10 }); },
+    throw_() { tone({ f0: 500, f1: 900, dur: 0.08, vol: 0.06 }); },
+    splash() { noise(0.25, 0.14, 1400); tone({ type: 'triangle', f0: 300, f1: 120, dur: 0.2, vol: 0.08 }); },
+    spray()  { noise(0.15, 0.10, 2500); },
+    bark()   { tone({ type: 'sawtooth', f0: 220, f1: 140, dur: 0.12, vol: 0.14 }); tone({ type: 'sawtooth', f0: 260, f1: 150, dur: 0.12, vol: 0.12, delay: 0.16 }); },
+    hum()    { tone({ type: 'sawtooth', f0: 90, f1: 95, dur: 0.6, vol: 0.05 }); },
+    boss()   { [220, 196, 174, 146].forEach((f, i) => tone({ type: 'square', f0: f, dur: 0.25, vol: 0.10, delay: i * 0.2 })); },
+    win()    { [523, 659, 784, 1046, 1318].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.3, vol: 0.10, delay: i * 0.12 })); },
+    laser()  { tone({ f0: 1800, f1: 2400, dur: 0.05, vol: 0.05 }); },
+    boing()  { tone({ type: 'triangle', f0: 300, f1: 600, dur: 0.15, vol: 0.09 }); },
   };
 })();
 
@@ -166,7 +183,8 @@ const CATS = {
 };
 const CAT_ORDER = ['scottie', 'delia', 'marmalade', 'mochi', 'pickle', 'biscuit', 'deli', 'clover'];
 const PASSIVE_POOL = ['shadow', 'double', 'float', 'ghost', 'bonk', 'yowl', 'slide', 'stocked', 'roll'];
-const POWERUPS = ['tuna', 'catnip', 'bell', 'fish'];
+const POWERUPS = ['tuna', 'catnip', 'bell', 'fish', 'box', 'laser', 'yarn'];
+const ITEM_CHARGES = { laser: 3, yarn: 5, box: 1 };
 
 /** Passives for this level (Biscuit rolls a random one each level). */
 function resolvePassives(catKey) {
@@ -284,6 +302,9 @@ class Player {
     this.trailTimer = 0;
     this.yowlCooldown = 0;
     this.bell = !!GameState.bell;
+    this.item = null;         // { kind, charges }
+    this.hiding = false;      // cardboard box
+    this.boxSprite = scene.add.image(x, groundY, 'box').setOrigin(0.5, 1).setDepth(12).setVisible(false);
     this.setSuper(GameState.super, true);
   }
 
@@ -322,9 +343,9 @@ class Player {
     this.scene.hud && this.scene.hud.refresh();
   }
 
-  knockback(fromX) {
+  knockback(fromX, mult = 1) {
     const dir = (this.body.x + this.body.halfWidth) < fromX ? -1 : 1;
-    this.body.setVelocity(dir * PHYS.knockback, -160);
+    this.body.setVelocity(dir * PHYS.knockback * mult, -160 * Math.sqrt(mult));
     this.hurtTimer = 0.35;
     this.dashTime = 0;
     this.stopClimb();
@@ -357,6 +378,15 @@ class Player {
     let inp = rawInp;
     if (this.autoInput) inp = this.autoInput(rawInp, dt);
     if (this.hurtTimer > 0) { this.hurtTimer -= dt; inp = NO_INPUT; }
+    // cardboard box: hold action to hide (invulnerable, can't move)
+    const wantHide = !!(this.item && this.item.kind === 'box' && inp.run && this.grounded && this.hurtTimer <= 0 && !this.locked);
+    if (wantHide !== this.hiding) {
+      this.hiding = wantHide;
+      this.boxSprite.setVisible(wantHide);
+      this.sprite.setVisible(!wantHide); this.tail.setVisible(!wantHide);
+      if (wantHide) Sfx.bonk();
+    }
+    if (this.hiding) { inp = NO_INPUT; }
     this.jumpHeld = inp.jump;
 
     const b = this.body;
@@ -374,7 +404,8 @@ class Player {
     this.coyote = grounded ? PHYS.coyoteTime : Math.max(0, this.coyote - dt);
     this.buffer = inp.jumpPressed ? PHYS.jumpBuffer : Math.max(0, this.buffer - dt);
 
-    if (justLanded && this.lastVy > 50) this.onLand(this.lastVy);
+    this.landedThisFrame = justLanded && this.lastVy > 50;
+    if (this.landedThisFrame) this.onLand(this.lastVy);
     if (grounded) { this.jumping = false; this.jumpCut = false; this.doubleUsed = false; }
 
     // --- curtain climbing ---------------------------------------------------
@@ -414,10 +445,12 @@ class Player {
       this.facing = dir;
     }
 
-    if (inp.actionPressed && this.has('yowl') && !this.locked && this.yowlCooldown <= 0) {
+    if (inp.actionPressed && this.item && this.item.kind !== 'box' && !this.locked) {
+      this.scene.useItem();
+    } else if (inp.actionPressed && this.has('yowl') && !this.locked && this.yowlCooldown <= 0) {
       this.yowlCooldown = PHYS.yowlCooldown;
       this.scene.yowl();
-    } else if (inp.actionPressed && !this.has('yowl') && this.dashCooldown <= 0 && this.dashTime <= 0 && !this.locked) {
+    } else if (inp.actionPressed && !this.has('yowl') && !(this.item && this.item.kind !== 'box') && this.dashCooldown <= 0 && this.dashTime <= 0 && !this.locked) {
       this.dashTime = PHYS.dashTime;
       this.dashCooldown = PHYS.dashCooldown;
       this.dashDir = this.facing;
@@ -529,6 +562,7 @@ class Player {
     const px = b.x + b.halfWidth + this.visualDx, py = b.y + b.height;
     this.sprite.x = px; this.sprite.y = py;
     this.tail.x = px; this.tail.y = py;
+    this.boxSprite.x = px; this.boxSprite.y = py;
     const flip = this.facing < 0;
     this.sprite.setFlipX(flip);
     this.tail.setFlipX(flip);
@@ -627,10 +661,10 @@ class Player {
 // Enemies & items
 // ---------------------------------------------------------------------------
 class Roomba extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y) {
+  constructor(scene, x, y, group) {
     super(scene, x, y, 'roomba', 0);
     scene.add.existing(this);
-    scene.physics.add.existing(this);
+    group.add(this);   // group first: adding later would reset the body config
     this.setOrigin(0.5, 1).setDepth(9);
     this.body.setSize(14, 8).setOffset(1, 8);
     this.dir = -1;
@@ -657,6 +691,14 @@ class Roomba extends Phaser.Physics.Arcade.Sprite {
     }
     const cam = this.scene.cameras.main;
     if (Math.abs(this.x - cam.midPoint.x) > W * 0.75) { this.body.setVelocityX(0); return; }
+    if (this.chaseT > 0) {
+      // chasing a laser dot: beeline, happily off ledges
+      this.chaseT -= d / 1000;
+      this.dir = Math.sign(this.chaseX - this.x) || this.dir;
+      this.body.setVelocityX(this.dir * PHYS.roombaSpeed * 1.8);
+      this.setFlipX(this.dir > 0);
+      return;
+    }
     if (this.body.blocked.left) this.dir = 1;
     else if (this.body.blocked.right) this.dir = -1;
     else if (this.body.blocked.down && !this.scene.solidAt(this.x + this.dir * 9, this.body.bottom + 2)) this.dir = -this.dir;
@@ -677,10 +719,10 @@ class Roomba extends Phaser.Physics.Arcade.Sprite {
 }
 
 class Item extends Phaser.Physics.Arcade.Sprite {
-  constructor(scene, x, y, kind, dir) {
+  constructor(scene, x, y, kind, dir, group) {
     super(scene, x, y, kind);
     scene.add.existing(this);
-    scene.physics.add.existing(this);
+    group.add(this);
     this.kind = kind;
     this.setDepth(8);
     this.dir = dir;
@@ -708,6 +750,167 @@ class Item extends Phaser.Physics.Arcade.Sprite {
   }
 }
 
+class Squirrel extends Phaser.Physics.Arcade.Sprite {
+  constructor(scene, x, y, group) {
+    super(scene, x, y, 'squirrel', 0);
+    scene.add.existing(this);
+    group.add(this);
+    this.setOrigin(0.5, 1).setDepth(9);
+    this.body.setAllowGravity(false);
+    this.body.setImmovable(true);
+    this.body.setSize(12, 12).setOffset(2, 4);
+    this.alive = true;
+    this.kind = 'squirrel';
+    this.stunned = 0;
+    this.timer = 1 + Math.random();
+    this.setFlipX(false);
+  }
+  stun(sec) { this.stunned = sec; this.setTint(0x8fa8ff); }
+  preUpdate(t, d) {
+    super.preUpdate(t, d);
+    if (!this.alive) return;
+    const dt = d / 1000;
+    if (this.stunned > 0) { this.stunned -= dt; if (this.stunned <= 0) this.clearTint(); return; }
+    const p = this.scene.player;
+    if (!p || p.dead) return;
+    const dx = p.box.x - this.x;
+    this.setFlipX(dx < 0);
+    this.setFrame(Math.floor(t / 400) % 2);
+    this.timer -= dt;
+    if (this.timer <= 0 && Math.abs(dx) < 170 && Math.abs(p.box.y - this.y) < 100) {
+      this.timer = 2;
+      this.scene.throwAcorn(this.x, this.y - 10, Math.sign(dx) || 1, Math.abs(dx));
+    }
+  }
+  stomp() {
+    this.alive = false;
+    this.setFrame(2);
+    this.body.enable = false;
+    const scene = this.scene;
+    scene.tweens.add({ targets: this, y: this.y - 16, duration: 160, onComplete: () => scene.tweens.add({ targets: this, y: this.y + 220, angle: 180, duration: 800, onComplete: () => this.destroy() }) });
+  }
+}
+
+class Sprinkler extends Phaser.GameObjects.Sprite {
+  constructor(scene, x, y) {
+    super(scene, x, y, 'sprinkler', 0);
+    scene.add.existing(this);
+    this.setOrigin(0.5, 1).setDepth(9);
+    this.phase = Math.random() * 4;
+    this.on = false;
+    this.drops = [];
+    // arc of droplets going up and to the right, then falling
+    // starts at the nozzle, peaks mid-way, comes back down to the grass
+    for (let i = 0; i < 7; i++) {
+      const dx = 8 + i * 9, dy = -6 - Math.sin((i / 6) * Math.PI) * 30;
+      const dp = scene.add.image(x + dx, y + dy, 'droplet').setDepth(8).setVisible(false);
+      dp.ox = dx; dp.oy = dy;
+      this.drops.push(dp);
+    }
+  }
+  preUpdate(t, d) {
+    super.preUpdate(t, d);
+    this.phase = (this.phase + d / 1000) % 4;
+    const on = this.phase < 2;
+    if (on !== this.on) { this.on = on; if (on) Sfx.spray(); }
+    this.setFrame(on ? 1 : 0);
+    const wob = Math.sin(t / 120) * 2;
+    for (const dp of this.drops) { dp.setVisible(on); dp.y = this.y + dp.oy + wob; }
+  }
+  hitsPlayer(b) {
+    if (!this.on) return false;
+    for (const dp of this.drops) {
+      if (dp.x > b.x - 2 && dp.x < b.x + b.width + 2 && dp.y > b.y - 2 && dp.y < b.y + b.height + 2) return true;
+    }
+    return false;
+  }
+}
+
+class SprayBottle extends Phaser.Physics.Arcade.Sprite {
+  constructor(scene, x, y, group) {
+    super(scene, x, y, 'spray', 0);
+    scene.add.existing(this);
+    group.add(this);
+    this.setOrigin(0.5, 1).setDepth(9);
+    this.body.setAllowGravity(false);
+    this.body.setImmovable(true);
+    this.body.setSize(10, 16).setOffset(3, 4);
+    this.alive = true;
+    this.kind = 'spray';
+    this.stunned = 0;
+    this.timer = 1.5;
+  }
+  stun(sec) { this.stunned = sec; this.setTint(0x8fa8ff); }
+  preUpdate(t, d) {
+    super.preUpdate(t, d);
+    if (!this.alive) return;
+    const dt = d / 1000;
+    if (this.stunned > 0) { this.stunned -= dt; if (this.stunned <= 0) this.clearTint(); return; }
+    const p = this.scene.player;
+    if (!p || p.dead) return;
+    const dx = p.box.x - this.x;
+    this.setFlipX(dx < 0);
+    this.timer -= dt;
+    if (this.timer <= 0 && Math.abs(dx) < 150 && Math.abs(p.box.y - (this.y - 10)) < 60) {
+      this.timer = 1.5;
+      this.setFrame(1);
+      this.scene.time.delayedCall(200, () => { if (this.active) this.setFrame(0); });
+      this.scene.fireBlob(this.x + Math.sign(dx) * 8, this.y - 14, Math.sign(dx) || 1, p.box.x, p.box.y);
+    }
+  }
+  stomp() {
+    this.alive = false;
+    this.body.enable = false;
+    const scene = this.scene;
+    scene.tweens.add({ targets: this, scaleY: 0.4, y: this.y, duration: 120, onComplete: () => scene.tweens.add({ targets: this, alpha: 0, duration: 400, onComplete: () => this.destroy() }) });
+  }
+}
+
+class Yarn extends Phaser.Physics.Arcade.Sprite {
+  constructor(scene, x, y, dir, group) {
+    super(scene, x, y, 'yarn');
+    scene.add.existing(this);
+    group.add(this);
+    this.setDepth(12);
+    this.body.setCircle(5);
+    this.body.setBounce(1, 0.6);
+    this.body.setVelocity(dir * PHYS.yarnSpeed, -50);
+    this.bounces = 0;
+    this.trail = 0;
+    this.life = 4;
+  }
+  preUpdate(t, d) {
+    super.preUpdate(t, d);
+    this.angle += this.body.velocity.x * d / 60;
+    this.life -= d / 1000;
+    this.trail -= d / 1000;
+    if (this.trail <= 0) {
+      this.trail = 0.04;
+      const bit = this.scene.add.image(this.x, this.y, 'string').setDepth(11).setAlpha(0.9);
+      this.scene.tweens.add({ targets: bit, alpha: 0, duration: 1500, onComplete: () => bit.destroy() });
+    }
+    if (this.body.blocked.left || this.body.blocked.right) { this.bounces++; Sfx.boing(); }
+    if (this.bounces > 3 || this.life <= 0 || this.y > this.scene.worldH + 20) this.destroy();
+  }
+}
+
+class Dog extends Phaser.GameObjects.Sprite {
+  constructor(scene, x, y) {
+    super(scene, x, y, 'dog', 0);
+    scene.add.existing(this);
+    this.setOrigin(0.5, 1).setDepth(13);
+    this.frameT = 0;
+    this.barkT = 1;
+  }
+  preUpdate(t, d) {
+    super.preUpdate(t, d);
+    this.frameT += d;
+    this.setFrame(Math.floor(this.frameT / 70) % 4);
+    this.barkT -= d / 1000;
+    if (this.barkT <= 0) { this.barkT = 2 + Math.random() * 2; Sfx.bark(); }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HUD (spec §8)
 // ---------------------------------------------------------------------------
@@ -715,6 +918,9 @@ class Hud {
   constructor(scene, showMice) {
     this.scene = scene;
     const d = 1000;
+    // translucent backing so the HUD reads on night and clinic backdrops too
+    scene.add.rectangle(2, 2, 122, 16, 0xfff4dc, 0.55).setOrigin(0).setScrollFactor(0).setDepth(d - 1);
+    if (showMice) scene.add.rectangle(W - 44, 2, 42, 12, 0xfff4dc, 0.55).setOrigin(0).setScrollFactor(0).setDepth(d - 1);
     this.lifeIcon = scene.add.image(4, 4, 'icon-life').setOrigin(0).setScrollFactor(0).setDepth(d);
     this.lifeText = this.text(14, 4);
     this.kibbleIcon = scene.add.image(36, 5, 'kibble').setOrigin(0).setScrollFactor(0).setDepth(d);
@@ -722,6 +928,8 @@ class Hud {
     this.slot = scene.add.rectangle(74, 3, 14, 12).setOrigin(0).setStrokeStyle(1, 0x3a2a1a, 0.6).setScrollFactor(0).setDepth(d);
     this.slotIcon = scene.add.image(81, 9, 'tuna').setScrollFactor(0).setDepth(d + 1).setVisible(false);
     this.cool = scene.add.rectangle(74, 16, 14, 2, 0x3a6fbf, 1).setOrigin(0).setScrollFactor(0).setDepth(d + 1).setVisible(false);
+    this.itemIcon = scene.add.image(97, 9, 'yarn').setScrollFactor(0).setDepth(d + 1).setVisible(false);
+    this.itemText = this.text(105, 4);
     if (showMice) {
       this.miceIcon = scene.add.image(W - 40, 4, 'icon-mouse').setOrigin(0).setScrollFactor(0).setDepth(d);
       this.miceText = this.text(W - 30, 4);
@@ -742,6 +950,9 @@ class Hud {
     const icon = (p && p.catnip > 0) ? 'catnip' : GameState.super ? 'tuna' : GameState.bell ? 'bell' : null;
     this.slotIcon.setVisible(!!icon);
     if (icon) this.slotIcon.setTexture(icon);
+    const it = p && p.item;
+    this.itemIcon.setVisible(!!it);
+    if (it) { this.itemIcon.setTexture(it.kind); this.itemText.set(it.kind === 'box' ? 'HOLD B' : 'x' + it.charges); } else this.itemText.set('');
     if (this.miceText) {
       const got = (GameState.mice[this.scene.level.id] || []).length;
       this.miceText.set(got + '/' + this.scene.miceTotal);
@@ -1013,6 +1224,61 @@ class PauseScene extends Phaser.Scene {
 }
 
 // ---------------------------------------------------------------------------
+// Finale (spec §6): all eight cats inside, Delia on the windowsill.
+// ---------------------------------------------------------------------------
+class FinaleScene extends Phaser.Scene {
+  constructor() { super('finale'); }
+  create() {
+    this.cameras.main.setBackgroundColor('#e6d8bf');
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    const g = this.add.graphics();
+    g.fillStyle(0xd9c7a6, 1);
+    for (let x = 0; x < W; x += 32) g.fillRect(x, 0, 8, H);
+    // window + sill
+    g.fillStyle(0xf4f1e8, 1); g.fillRect(200, 22, 96, 66);
+    g.fillStyle(0x2a2050, 1); g.fillRect(204, 26, 88, 58);
+    for (let i = 0; i < 14; i++) { g.fillStyle(0xffffff, 1); g.fillRect(206 + (i * 37) % 84, 28 + (i * 23) % 50, 1, 1); }
+    g.fillStyle(0xfff4c0, 1); g.fillCircle(276, 42, 8);
+    g.fillStyle(0xf4f1e8, 1); g.fillRect(247, 26, 2, 58); g.fillRect(204, 54, 88, 2);
+    g.fillStyle(0xb8844d, 1); g.fillRect(196, 88, 104, 8);
+    g.fillStyle(0x4a2f1a, 1); g.fillRect(196, 95, 104, 1);
+    // rug + floor
+    g.fillStyle(0xb89a70, 1); g.fillRect(0, 150, W, 6);
+    g.fillStyle(0x8c6d48, 1); g.fillRect(0, 155, W, 1);
+    this.add.tileSprite(0, 156, W, 24, 'tiles-w1', Sprites.TILE.FLOOR_TOP).setOrigin(0);
+    this.add.tileSprite(60, 156, 200, 16, 'tiles-w1', Sprites.TILE.RUG).setOrigin(0);
+    this.add.image(24, 156, 'lamp').setOrigin(0.5, 1);
+    // Glen & Em on the couch side
+    this.add.tileSprite(96, 156, 48, 16, 'tiles-w1', Sprites.TILE.COUCH_M).setOrigin(0, 1);
+    this.add.sprite(60, 156, 'glen').setOrigin(0.5, 1).play('glen-pet');
+    this.add.sprite(84, 156, 'em').setOrigin(0.5, 1).play('em-wave');
+    // the cats
+    const spots = [[118, 156, 'sit'], [140, 156, 'idle'], [162, 156, 'sit'], [184, 156, 'walk'], [206, 156, 'idle'], [228, 156, 'sit'], [250, 156, 'idle']];
+    let i = 0;
+    for (const key of CAT_ORDER) {
+      if (key === 'delia') { const a = makeCatActor(this, 'delia', 248, 88); a.sit(); a.setFlip(true); continue; }
+      const [x, y, anim] = spots[i++];
+      const a = makeCatActor(this, key, x, y);
+      if (anim === 'sit') a.sit(); else a.play(anim);
+      a.setFlip(i % 2 === 0);
+    }
+    const lx = 100;
+    this.add.bitmapText(lx + 2, 26, 'font', 'HOME').setOrigin(0.5).setScale(3).setTint(0x3a2414);
+    this.add.bitmapText(lx, 24, 'font', 'HOME').setOrigin(0.5).setScale(3).setTint(0xf2c94c);
+    this.add.bitmapText(lx, 52, 'font', 'ALL NINE LIVES').setOrigin(0.5).setTint(0x6b4a2a);
+    this.add.bitmapText(lx, 64, 'font', 'ACCOUNTED FOR').setOrigin(0.5).setTint(0x6b4a2a);
+    const mice = Object.values(GameState.mice).reduce((a, l) => a + l.length, 0);
+    this.add.bitmapText(lx, 84, 'font', 'KIBBLE ' + String(GameState.kibble).padStart(3, '0')).setOrigin(0.5).setTint(0x6b4a2a);
+    this.add.bitmapText(lx, 96, 'font', 'LIVES x' + GameState.lives + (mice ? '  MICE ' + mice : '')).setOrigin(0.5).setTint(0x6b4a2a);
+    this.prompt = this.add.bitmapText(W / 2, 170, 'font', 'THANKS FOR PLAYING').setOrigin(0.5).setTint(0x8c6d48);
+    Sfx.win();
+    const go = () => { this.scene.start('title'); };
+    this.time.delayedCall(1500, () => { this.input.keyboard.once('keydown', go); this.input.once('pointerdown', go); });
+  }
+  update(time) { this.prompt.setVisible(Math.floor(time / 600) % 2 === 0); }
+}
+
+// ---------------------------------------------------------------------------
 // Play scene
 // ---------------------------------------------------------------------------
 class PlayScene extends Phaser.Scene {
@@ -1023,6 +1289,10 @@ class PlayScene extends Phaser.Scene {
     this.cutscene = null;
     this.hud = null;
     this.touch = null;
+    this.boss = null;
+    this.bossText = null;
+    this.chase = null;
+    this.parallax = false;
     this.dt = 0;
     this.muted = this.muted || false;
     this.passives = resolvePassives(GameState.cat);
@@ -1044,14 +1314,13 @@ class PlayScene extends Phaser.Scene {
     this.physics.world.setBoundsCollision(true, true, true, false);
     this.physics.world.TILE_BIAS = 12;
     this.cameras.main.setBounds(0, 0, mapW, worldH);
-    this.cameras.main.setBackgroundColor('#e6d8bf');
-    this.drawBackdrop(mapW, worldH);
+    this.drawBackdrop(mapW, worldH, level.world);
 
     const map = this.make.tilemap({ data: level.grid, tileWidth: TILE, tileHeight: TILE });
-    const tileset = map.addTilesetImage('tiles', 'tiles', TILE, TILE, 0, 0);
+    const tileset = map.addTilesetImage('tiles', 'tiles-w' + level.world, TILE, TILE, 0, 0);
     this.map = map;
     this.layer = map.createLayer(0, tileset, 0, this.mapOffsetY).setDepth(5);
-    this.layer.setCollision([T.FLOOR_TOP, T.FLOOR_FILL, T.SHELF, T.BRICK, T.PAW, T.PAW_USED, T.KITCHEN, T.COUCH_L, T.COUCH_M, T.COUCH_R, T.RUG]);
+    this.layer.setCollision([T.FLOOR_TOP, T.FLOOR_FILL, T.SHELF, T.BRICK, T.PAW, T.PAW_USED, T.KITCHEN, T.COUCH_L, T.COUCH_M, T.COUCH_R, T.RUG, T.BLOCK]);
     this.layer.forEachTile(tile => {
       if (tile.index === T.SHELF) tile.setCollision(false, false, true, false);
     });
@@ -1066,14 +1335,30 @@ class PlayScene extends Phaser.Scene {
     const ty = c => this.mapOffsetY + c.y * TILE + TILE / 2;
     const tbottom = c => this.mapOffsetY + (c.y + 1) * TILE;
 
+    this.doorLocked = !!level.boss;
     if (level.door) {
       const dx = Math.min(tx(level.door), mapW - 16);
       const dy = tbottom(level.door);
       this.doorX = dx; this.doorY = dy;
-      this.doorway = this.add.image(dx, dy, 'doorway', 0).setOrigin(0.5, 1).setDepth(3);
-      this.glen = this.add.sprite(dx - 7, dy, 'glen').setOrigin(0.5, 1).setDepth(4).play('glen-wave');
-      this.em = this.add.sprite(dx + 7, dy, 'em').setOrigin(0.5, 1).setDepth(4).play('em-wave');
+      this.flap = !!level.door.flap;
+      if (this.flap) {
+        this.doorway = this.add.image(dx, dy, 'catflap').setOrigin(0.5, 1).setDepth(3);
+      } else {
+        this.doorway = this.add.image(dx, dy, 'doorway', 0).setOrigin(0.5, 1).setDepth(3);
+        this.glen = this.add.sprite(dx - 7, dy, 'glen').setOrigin(0.5, 1).setDepth(4).play('glen-wave');
+        this.em = this.add.sprite(dx + 7, dy, 'em').setOrigin(0.5, 1).setDepth(4).play('em-wave');
+        if (this.doorLocked) { this.glen.setVisible(false); this.em.setVisible(false); this.doorway.setFrame(1); }
+      }
       this.doorZone = new Phaser.Geom.Rectangle(dx - 26, dy - 64, 40, 64 + 24);
+    }
+
+    // decor sprites ('@'): birdbath / neon / x-ray box / string lights by world
+    for (const dcr of level.decor) {
+      const w = level.world;
+      if (w === 2) this.add.image(tx(dcr), tbottom(dcr), 'birdbath').setOrigin(0.5, 1).setDepth(2);
+      else if (w === 3) { const n = this.add.sprite(tx(dcr), ty(dcr), 'neon').setDepth(2); this.time.addEvent({ delay: 700, loop: true, callback: () => n.setFrame(n.frame.name === 0 ? 1 : 0) }); }
+      else if (w === 4) this.add.image(tx(dcr), ty(dcr), 'xray').setDepth(2);
+      else { const l = this.add.sprite(tx(dcr), ty(dcr), 'lights').setDepth(2); this.time.addEvent({ delay: 500, loop: true, callback: () => l.setFrame(l.frame.name === 0 ? 1 : 0) }); }
     }
 
     this.kibble = this.physics.add.group({ allowGravity: false, immovable: true });
@@ -1102,8 +1387,17 @@ class PlayScene extends Phaser.Scene {
     }
 
     this.enemies = this.physics.add.group();
-    for (const r of level.roombas) this.enemies.add(new Roomba(this, tx(r), tbottom(r)));
+    for (const r of level.roombas) new Roomba(this, tx(r), tbottom(r), this.enemies);
+    for (const q of level.squirrels) new Squirrel(this, tx(q), tbottom(q), this.enemies);
+    for (const y of level.sprays) new SprayBottle(this, tx(y), tbottom(y), this.enemies);
     this.physics.add.collider(this.enemies, this.layer);
+    this.sprinklers = level.sprinklers.map(sp => new Sprinkler(this, tx(sp), tbottom(sp)));
+    this.projectiles = this.physics.add.group();
+    this.physics.add.collider(this.projectiles, this.layer, (pr) => { if (pr.kind === 'acorn') pr.destroy(); });
+    this.yarns = this.physics.add.group();
+    this.physics.add.collider(this.yarns, this.layer);
+    this.physics.add.overlap(this.yarns, this.enemies, (y, e) => { if (e.alive) { e.stomp(); Sfx.stomp(); this.popText(e.x, e.y - 14, 'BONK', 0x3a3a48); } });
+    this.laserDot = null;
 
     this.cucumbers = this.physics.add.group({ allowGravity: false, immovable: true });
     this.cucumberTriggers = level.cucumbers.map(c => ({ x: c.x * TILE, y: tbottom(c), fired: false }));
@@ -1130,6 +1424,12 @@ class PlayScene extends Phaser.Scene {
     this.physics.add.overlap(this.player.box, this.enemies, (box, e) => this.onEnemyContact(e));
     this.physics.add.overlap(this.player.box, this.cucumbers, (box, c) => this.onCucumber(c));
     this.physics.add.overlap(this.player.box, this.items, (box, it) => this.onItem(it));
+    this.physics.add.overlap(this.player.box, this.projectiles, (box, pr) => { if (!this.player.hiding) { pr.destroy(); this.hurt(pr.x); } else pr.destroy(); });
+
+    // --- chase / bosses --------------------------------------------------------
+    this.chase = level.chase ? { dog: new Dog(this, start.x - 60, start.y), started: false } : null;
+    if (level.boss === 'vacuum') this.setupVacuum(level, tx, tbottom);
+    if (level.boss === 'bath') this.setupBath(level, tx, ty, tbottom);
 
     // --- camera (spec §7: follow, dead-zone 40px) ------------------------------
     const cam = this.cameras.main;
@@ -1158,6 +1458,8 @@ class PlayScene extends Phaser.Scene {
       backgroundColor: '#00000088', padding: { x: 2, y: 1 },
     }).setScrollFactor(0).setDepth(1001).setVisible(false);
 
+    if (level.boss) Sfx.boss();
+
     // level banner (+ passive note for Biscuit / Deli)
     const banner = this.add.bitmapText(W / 2, 60, 'font', 'LEVEL ' + level.id).setOrigin(0.5).setScale(2).setScrollFactor(0).setDepth(1500).setTint(0x3a2414);
     this.tweens.add({ targets: banner, alpha: 0, delay: 1200, duration: 400, onComplete: () => banner.destroy() });
@@ -1175,7 +1477,19 @@ class PlayScene extends Phaser.Scene {
     }
   }
 
-  drawBackdrop(mapW, worldH) {
+  drawBackdrop(mapW, worldH, world) {
+    const cam = this.cameras.main;
+    if (world && world !== 1) {
+      const keyFar = 'bg-far-' + world, keyNear = 'bg-near-' + world;
+      if (!this.textures.exists(keyFar)) this.makeBackdropTextures(world, keyFar, keyNear);
+      const skyColors = { 2: '#9fd0f0', 3: '#101428', 4: '#d8ecec', 5: '#f4b08a' };
+      cam.setBackgroundColor(skyColors[world]);
+      this.add.tileSprite(0, 0, W, H, keyFar).setOrigin(0).setScrollFactor(0).setDepth(0).setName('far');
+      this.add.tileSprite(0, 0, W, H, keyNear).setOrigin(0).setScrollFactor(0).setDepth(0.5).setName('near');
+      this.parallax = true;
+      return;
+    }
+    cam.setBackgroundColor('#e6d8bf');
     const g = this.add.graphics().setDepth(0);
     g.fillStyle(0xd9c7a6, 1);
     for (let x = 0; x < mapW; x += 32) g.fillRect(x, 0, 8, worldH);
@@ -1191,6 +1505,28 @@ class PlayScene extends Phaser.Scene {
       g.fillStyle(0x6b4a2a, 1); g.fillRect(x + 32, 50, 3, 15);
       g.fillStyle(0xf4f1e8, 1); g.fillRect(x + 27, 27, 2, 38); g.fillRect(x + 3, 45, 50, 2);
     }
+  }
+
+  /** Two 320x180 repeating backdrop textures per world (spec §6 parallax). */
+  makeBackdropTextures(world, keyFar, keyNear) {
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+    const rect = (c, x, y, w, h) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    const circ = (c, x, y, r) => { g.fillStyle(c, 1); g.fillCircle(x, y, r); };
+    // far layer
+    g.clear();
+    if (world === 2) { rect(0x9fd0f0, 0, 0, W, H); for (let i = 0; i < 5; i++) { circ(0xffffff, 30 + i * 70, 30 + (i % 2) * 18, 12); circ(0xffffff, 48 + i * 70, 34 + (i % 2) * 18, 9); } rect(0x6fa85a, 0, 120, W, 60); for (let i = 0; i < 4; i++) { circ(0x4f8a3a, 40 + i * 90, 118, 22); rect(0x5a3a1a, 37 + i * 90, 118, 6, 30); } }
+    if (world === 3) { rect(0x101428, 0, 0, W, H); for (let i = 0; i < 40; i++) rect(0xffffff, (i * 53) % W, (i * 29) % 90, 1, 1); circ(0xfff4c0, 260, 30, 12); for (let i = 0; i < 6; i++) { const h = 60 + (i * 37) % 50; rect(0x1c2040, i * 56, H - h - 20, 44, h + 20); for (let y = 0; y < h; y += 10) for (let x = 4; x < 40; x += 10) if ((x + y + i) % 3) rect(0xf2c94c, i * 56 + x, H - h - 16 + y, 4, 5); } }
+    if (world === 4) { rect(0xd8ecec, 0, 0, W, H); rect(0xa8c8c8, 0, 0, W, 12); rect(0x8fb0b0, 0, 12, W, 2); for (let i = 0; i < 4; i++) { rect(0xffffff, 20 + i * 84, 30, 48, 36); rect(0x7fc8c8, 24 + i * 84, 34, 40, 28); } rect(0xb8d0d0, 0, 140, W, 40); }
+    if (world === 5) { rect(0xf4b08a, 0, 0, W, 90); rect(0xe88a6a, 0, 90, W, 90); circ(0xffe0a0, 250, 70, 18); for (let i = 0; i < 7; i++) { const h = 40 + (i * 31) % 60; rect(0x5a3a4a, i * 48, H - h, 40, h); } }
+    g.generateTexture(keyFar, W, H);
+    // near layer (transparent background)
+    g.clear();
+    if (world === 2) { for (let i = 0; i < 20; i++) { rect(0xe8d8b0, i * 16, 130, 8, 30); rect(0xe8d8b0, i * 16 - 2, 130, 12, 3); } rect(0xd8c8a0, 0, 150, W, 3); for (let i = 0; i < 6; i++) circ(0x4f8a3a, 20 + i * 56, 156, 12); }
+    if (world === 3) { rect(0x2a2438, 0, 100, W, 80); for (let y = 100; y < 180; y += 8) for (let x = 0; x < W; x += 16) rect(0x342c44, x + (y % 16 ? 8 : 0), y, 15, 7); rect(0x1a1428, 0, 178, W, 2); }
+    if (world === 4) { for (let i = 0; i < 5; i++) { rect(0xe8f0f0, 10 + i * 66, 90, 50, 70); rect(0xc8d8d8, 10 + i * 66, 90, 50, 3); rect(0xc8d8d8, 34 + i * 66, 90, 2, 70); rect(0x8fb0b0, 22 + i * 66, 120, 6, 2); rect(0x8fb0b0, 42 + i * 66, 120, 6, 2); } }
+    if (world === 5) { for (let i = 0; i < 8; i++) { rect(0x3a2a34, i * 44, 150, 3, 30); } rect(0x3a2a34, 0, 150, W, 3); rect(0x3a2a34, 0, 164, W, 2); for (let i = 0; i < 5; i++) { circ(0x8f6a4a, 30 + i * 70, 150, 8); rect(0x6a4a3a, 28 + i * 70, 150, 4, 30); } }
+    g.generateTexture(keyNear, W, H);
+    g.destroy();
   }
 
   // --- tile queries -------------------------------------------------------------
@@ -1219,6 +1555,207 @@ class PlayScene extends Phaser.Scene {
     this.popText(p.box.x, p.box.y - 20, 'YOWL!', 0xc0304a);
   }
 
+  throwAcorn(x, y, dir, dist) {
+    const a = this.projectiles.create(x, y, 'acorn').setDepth(10);
+    a.kind = 'acorn';
+    a.body.setCircle(3);
+    const vx = dir * Math.min(120, 50 + dist * 0.5);
+    a.body.setVelocity(vx, -200);
+    Sfx.throw_();
+    this.time.delayedCall(4000, () => a.active && a.destroy());
+  }
+
+  fireBlob(x, y, dir, targetX, targetY) {
+    const bl = this.projectiles.create(x, y, 'blob').setDepth(10);
+    bl.kind = 'blob';
+    bl.body.setAllowGravity(false);
+    bl.body.setSize(4, 4);
+    // aim at the cat (clamped to a shallow angle so it stays dodgeable)
+    const ddx = ((targetX !== undefined ? targetX : x + dir) - x) * dir;   // measured along the firing direction
+    const ddy = (targetY !== undefined ? targetY : y) - y;
+    const ang = Phaser.Math.Clamp(Math.atan2(ddy, Math.max(1, ddx)), -0.6, 0.6);
+    bl.body.setVelocity(dir * Math.cos(ang) * 110, Math.sin(ang) * 110);
+    Sfx.spray();
+    this.time.delayedCall(2500, () => bl.active && bl.destroy());
+  }
+
+  /** Action button with a held item: laser pointer or yarn ball. */
+  useItem() {
+    const p = this.player, it = p.item;
+    if (!it || it.charges <= 0) return;
+    const cx = p.box.x, cy = p.box.y;
+    if (it.kind === 'laser') {
+      Sfx.laser();
+      const tx = cx + p.facing * PHYS.laserRange, ty = cy + 4;
+      if (this.laserDot) this.laserDot.destroy();
+      const dot = this.add.image(tx, ty, 'dot').setDepth(14);
+      this.laserDot = dot;
+      this.tweens.add({ targets: dot, alpha: 0.3, yoyo: true, repeat: -1, duration: 120 });
+      // nearest live enemy chases the dot for 3s (roombas walk off ledges)
+      let best = null, bd = 1e9;
+      for (const e of this.enemies.getChildren()) { if (!e.alive || e.kind !== 'roomba') continue; const d = Math.abs(e.x - tx); if (d < bd) { bd = d; best = e; } }
+      if (best) { best.chaseX = tx; best.chaseT = 3; }
+      this.time.delayedCall(3000, () => { if (this.laserDot === dot) { dot.destroy(); this.laserDot = null; } });
+    } else if (it.kind === 'yarn') {
+      Sfx.throw_();
+      new Yarn(this, cx + p.facing * 12, p.body.y + p.body.height - 6, p.facing, this.yarns);   // rolls along the floor
+    }
+    it.charges -= 1;
+    if (it.charges <= 0) p.item = null;
+    this.hud.refresh();
+  }
+
+  // --- Vacuum boss (4-4) ----------------------------------------------------------
+  setupVacuum(level, tx, tbottom) {
+    const x = tx(level.vacuum), y = tbottom(level.vacuum);
+    const v = this.add.sprite(x, y, 'vacuum', 0).setDepth(9);
+    v.setOrigin(0.5, 1);
+    this.boss = { kind: 'vacuum', sprite: v, x, y, hits: 0, alive: true, plug: null, plugT: 0.5, humT: 0 };
+    this.time.addEvent({ delay: 300, loop: true, callback: () => { if (this.boss.alive) v.setFrame(v.frame.name === 0 ? 1 : 0); } });
+    this.bossText = this.add.bitmapText(W / 2, 20, 'font', 'STOMP THE PLUG x3').setOrigin(0.5).setScrollFactor(0).setDepth(1500).setTint(0x8c3a1a);
+  }
+
+  spawnPlug() {
+    const bs = this.boss;
+    const pl = this.physics.add.sprite(bs.x - 24, bs.y - 4, 'plug').setDepth(10);
+    pl.body.setSize(12, 14).setOffset(-1, -6);   // tall body so a falling cat can't skip past it
+    pl.body.setBounce(0, 0);
+    pl.dir = -1;
+    this.physics.add.collider(pl, this.layer);
+    bs.plug = pl;
+    this.physics.add.overlap(this.player.box, pl, () => this.onPlug(pl));
+  }
+
+  onPlug(pl) {
+    const bs = this.boss;
+    if (!bs.alive || !pl.active || pl.hit) return;
+    const pb = this.player.body;
+    const stomp = (pb.velocity.y > 0 || this.player.lastVy > 50 || this.player.landedThisFrame) && (pb.y + pb.height) <= pl.body.y + pl.body.height;
+    if (!stomp) return;
+    pl.hit = true;
+    pb.setVelocityY(PHYS.stompBounce);
+    Sfx.stomp();
+    bs.hits += 1;
+    this.cameras.main.shake(150, 0.006);
+    this.popText(pl.x, pl.y - 12, bs.hits + '/3', 0xf2c94c);
+    this.tweens.add({ targets: pl, alpha: 0, scaleY: 0.3, duration: 200, onComplete: () => pl.destroy() });
+    bs.plug = null; bs.plugT = 1.5;
+    if (bs.hits >= 3) this.bossDefeated();
+  }
+
+  bossDefeated() {
+    const bs = this.boss;
+    bs.alive = false;
+    Sfx.win();
+    if (this.bossText) this.bossText.setText('THE COAST IS CLEAR!');
+    if (bs.kind === 'vacuum') {
+      this.tweens.add({ targets: bs.sprite, angle: 80, y: bs.sprite.y + 6, duration: 700, ease: 'Bounce.easeOut' });
+      for (let i = 0; i < 6; i++) this.time.delayedCall(i * 120, () => this.dust(bs.x - 10 + Math.random() * 20, bs.y - Math.random() * 20, 1));
+    }
+    this.doorLocked = false;
+    if (this.doorway && !this.flap) { this.doorway.setFrame(0); if (this.glen) { this.glen.setVisible(true); this.em.setVisible(true); } }
+  }
+
+  updateVacuum(dt) {
+    const bs = this.boss, p = this.player, b = p.body;
+    if (!bs.alive) return;
+    bs.humT -= dt; if (bs.humT <= 0) { bs.humT = 0.6; Sfx.hum(); }
+    // landing squarely on the plug counts, even if the floor collider resolved first
+    if (bs.plug && bs.plug.active && !bs.plug.hit && p.landedThisFrame) {
+      const pl = bs.plug, cx = b.x + b.halfWidth, feet = b.y + b.height;
+      if (Math.abs(cx - pl.x) < 15 && Math.abs(feet - (pl.body.y + pl.body.height)) < 6) this.onPlug(pl);
+    }
+    // plug skitters along the floor between the walls; respawns after a hit
+    if (!bs.plug) { bs.plugT -= dt; if (bs.plugT <= 0) this.spawnPlug(); }
+    else {
+      // the cord only reaches so far: the plug skitters within 180px of the vacuum
+      const pl = bs.plug;
+      if (pl.body.blocked.left || pl.x < bs.x - 180) pl.dir = 1;
+      else if (pl.body.blocked.right || pl.x > bs.x - 12) pl.dir = -1;
+      pl.body.setVelocityX(pl.dir * 70);
+    }
+    // suction unless a steel table stands between the cat and the vacuum
+    const cx = b.x + b.halfWidth, cy = b.y + b.halfHeight;
+    const dx = bs.x - cx;
+    if (Math.abs(dx) < 260 && !p.dead && !p.hiding) {
+      let covered = false;
+      const step = Math.sign(dx) * TILE;
+      for (let x = cx + step; Math.abs(x - cx) < Math.abs(dx); x += step) { const t = this.tileAt(x, cy); if (t && t.index === this.T.BLOCK) { covered = true; break; } }
+      if (!covered) {
+        // a steady drift (not a force), so the cat's own movement logic stays in
+        // charge: standing still drifts in, walking away barely holds, running escapes
+        p.box.x += Math.sign(dx) * PHYS.vacuumPull * dt;
+        if (Math.random() < 0.15) this.dust(cx - Math.sign(dx) * 12, b.y + b.height, -Math.sign(dx));
+      }
+    }
+    if (Math.abs(dx) < 16 && Math.abs(bs.y - (b.y + b.height)) < 24) this.hurt(bs.x);
+  }
+
+  // --- Bath boss (5-2) -------------------------------------------------------------
+  setupBath(level, tx, ty, tbottom) {
+    const x = tx(level.bath), y = tbottom(level.bath);
+    const floorY = this.mapOffsetY + 7 * TILE;
+    this.boss = { kind: 'bath', alive: true, x, y, floorY, level: 0, rate: 1 / PHYS.bathFillTime, plugsLeft: level.plugs.length, ducks: [] };
+    // tap
+    const tap = this.add.graphics().setDepth(4);
+    tap.fillStyle(0xc8c8d0, 1); tap.fillRect(x - 4, y - 40, 8, 40); tap.fillRect(x - 4, y - 44, 22, 6); tap.fillCircle(x + 18, y - 38, 4);
+    this.water = this.add.rectangle(0, floorY, this.worldW, 0, 0x3a6fbf, 0.7).setOrigin(0, 1).setDepth(12);
+    this.waterTop = this.add.rectangle(0, floorY, this.worldW, 2, 0x9fd0ff, 0.9).setOrigin(0, 1).setDepth(12);
+    for (const pg of level.plugs) {
+      const d = this.physics.add.image(tx(pg), tbottom(pg), 'drain').setOrigin(0.5, 1).setDepth(10);
+      d.body.setAllowGravity(false); d.body.setImmovable(true);
+      d.body.setSize(10, 6).setOffset(0, 0);
+      this.physics.add.overlap(this.player.box, d, () => this.onDrain(d));
+    }
+    for (const dk of level.ducks) {
+      const d = this.physics.add.sprite(tx(dk), tbottom(dk) - 4, 'duck').setDepth(10);
+      d.body.setBounce(1, 0.9);
+      d.body.setVelocity((Math.random() < 0.5 ? -1 : 1) * 60, -80);
+      d.body.setCollideWorldBounds(true);
+      d.body.setSize(10, 8);
+      this.physics.add.collider(d, this.layer);
+      this.physics.add.overlap(this.player.box, d, () => this.onDuck(d));
+      this.time.addEvent({ delay: 250, loop: true, callback: () => d.active && d.setFrame(d.frame.name === 0 ? 1 : 0) });
+      this.boss.ducks.push(d);
+    }
+    this.bossText = this.add.bitmapText(W / 2, 20, 'font', 'PULL 4 PLUGS!').setOrigin(0.5).setScrollFactor(0).setDepth(1500).setTint(0x8c3a1a);
+  }
+
+  onDrain(d) {
+    const bs = this.boss;
+    if (!bs.alive || !d.active) return;
+    const pb = this.player.body;
+    const stomp = (pb.velocity.y > 0 || this.player.lastVy > 50 || this.player.landedThisFrame) && (pb.y + pb.height) <= d.body.y + d.body.height + 2;
+    if (!stomp) return;
+    d.destroy();
+    pb.setVelocityY(PHYS.stompBounce);
+    Sfx.stomp(); Sfx.splash();
+    bs.plugsLeft -= 1;
+    bs.level = Math.max(0, bs.level - 0.22);
+    bs.rate *= 0.8;
+    this.popText(d.x, d.y - 12, (4 - bs.plugsLeft) + '/4', 0xf2c94c);
+    if (bs.plugsLeft <= 0) { bs.rate = -0.5; this.bossDefeated(); }
+  }
+
+  onDuck(d) {
+    const pb = this.player.body;
+    const stomp = pb.velocity.y > 0 && (pb.y + pb.height) < d.body.y + d.body.height * 0.6;
+    if (stomp) { pb.setVelocityY(PHYS.stompBounce); d.body.setVelocityY(120); Sfx.boing(); }
+    else this.hurt(d.x);
+  }
+
+  updateBath(dt) {
+    const bs = this.boss, p = this.player, b = p.body;
+    bs.level = Phaser.Math.Clamp(bs.level + bs.rate * dt, 0, 1);
+    const maxH = bs.floorY - (this.mapOffsetY + 8);
+    const h = bs.level * maxH;
+    this.water.height = h; this.water.setSize(this.worldW, h);
+    this.waterTop.y = bs.floorY - h;
+    for (const d of bs.ducks) if (d.active && d.y > bs.floorY - h - 4 && h > 6) { d.body.setVelocityY(Math.min(d.body.velocity.y, -90)); }
+    if (bs.alive && h > 4 && (b.y + b.height) > bs.floorY - h + 4 && !p.dead) { Sfx.splash(); this.die(); }
+    if (!bs.alive && bs.level <= 0) this.water.setVisible(false);
+  }
+
   breakBrick(tile) {
     const wx = tile.x * TILE, wy = this.mapOffsetY + tile.y * TILE;
     Sfx.crack();
@@ -1234,8 +1771,8 @@ class PlayScene extends Phaser.Scene {
   powerupFor(tile) {
     const first = this.level.pawBlocks.reduce((a, b) => (b.x < a.x ? b : a));
     if (tile.x === first.x && tile.y === first.y) return 'tuna';
-    const h = (tile.x * 7 + tile.y * 13) % 10;
-    return h < 5 ? 'tuna' : h < 8 ? 'catnip' : h < 9 ? 'bell' : 'fish';
+    const h = (tile.x * 7 + tile.y * 13) % 13;
+    return ['tuna', 'tuna', 'tuna', 'catnip', 'catnip', 'bell', 'fish', 'box', 'laser', 'laser', 'yarn', 'yarn', 'tuna'][h];
   }
 
   applyPowerup(kind, x, y) {
@@ -1259,6 +1796,13 @@ class PlayScene extends Phaser.Scene {
         GameState.lives += 1;
         Sfx.life();
         this.popText(x, y - 8, '1UP', 0x2f8f4f);
+        break;
+      case 'box':
+      case 'laser':
+      case 'yarn':
+        p.item = { kind, charges: ITEM_CHARGES[kind] };
+        Sfx.powerup();
+        this.popText(x, y - 8, kind === 'box' ? 'HOLD B TO HIDE' : kind === 'laser' ? 'B: LASER' : 'B: THROW', 0x3a6fbf);
         break;
     }
     this.hud.refresh();
@@ -1319,7 +1863,7 @@ class PlayScene extends Phaser.Scene {
       this.layer.removeTileAt(tile.x, tile.y);
       bump(T.PAW, () => this.layer.putTileAt(T.PAW_USED, tile.x, tile.y));
       const dir = this.player.facing;
-      this.items.add(new Item(this, wx + 8, wy + 8, this.powerupFor(tile), dir));
+      new Item(this, wx + 8, wy + 8, this.powerupFor(tile), dir, this.items);
       this.time.delayedCall(450, () => Sfx.powerup());
     } else if (tile.index === T.BRICK) {
       if (this.player.super) {
@@ -1342,7 +1886,7 @@ class PlayScene extends Phaser.Scene {
 
   // --- enemies ----------------------------------------------------------------------
   onEnemyContact(e) {
-    if (!e.alive || this.player.dead || this.cutscene) return;
+    if (!e.alive || this.player.dead || this.cutscene || this.player.hiding) return;
     const pb = this.player.body;
     const feet = pb.y + pb.height;
     const stomp = pb.velocity.y > 0 && feet < e.body.y + e.body.height * 0.7;
@@ -1385,13 +1929,13 @@ class PlayScene extends Phaser.Scene {
     Sfx.bonk();
   }
 
-  hurt(fromX) {
+  hurt(fromX, water = false) {
     const p = this.player;
-    if (p.invuln > 0 || p.dead || this.cutscene) return;
+    if (p.invuln > 0 || p.dead || this.cutscene || p.hiding) return;
     if (p.super) {
       p.setSuper(false);
       p.invuln = 1.0;
-      p.knockback(fromX);
+      p.knockback(fromX, water && p.has('slide') ? 2 : 1);
       Sfx.hurt();
     } else {
       this.die();
@@ -1408,6 +1952,7 @@ class PlayScene extends Phaser.Scene {
     p.sprite.anims.stop();
     p.sprite.setFrame(p.F.hurt);
     p.tail.setVisible(false);
+    p.boxSprite.setVisible(false); p.sprite.setVisible(true);
     p.sprite.setAlpha(1);
     this.cameras.main.stopFollow();
     Sfx.die();
@@ -1456,7 +2001,8 @@ class PlayScene extends Phaser.Scene {
   // --- door ending (spec §6) ------------------------------------------------------
   startEnding() {
     const p = this.player;
-    this.cutscene = { step: 'walk', t: 0 };
+    this.cutscene = { step: this.flap ? 'flap' : 'walk', t: 0 };
+    if (this.chase) { this.chase.done = true; }
     p.locked = true;
     p.speedScale = 0.5;
     p.setShadow(false);
@@ -1469,6 +2015,10 @@ class PlayScene extends Phaser.Scene {
     const cs = this.cutscene, p = this.player;
     cs.t += dt;
     switch (cs.step) {
+      case 'flap':
+        // dog chase: dive through the cat flap
+        if (p.box.x >= this.doorX - 6 || cs.t > 3) { p.sprite.setVisible(false); p.tail.setVisible(false); p.body.enable = false; Sfx.door(); cs.step = 'close'; cs.t = 0; }
+        break;
       case 'walk':
         if (p.box.x >= this.doorX - 4 || cs.t > 6) {
           cs.step = 'rub'; cs.t = 0;
@@ -1517,12 +2067,31 @@ class PlayScene extends Phaser.Scene {
           GameState.checkpoint = null;
           GameState.bell = false;
           const ids = Levels.all();
-          const next = ids[ids.indexOf(this.level.id) + 1];
-          if (next) { GameState.level = next; this.scene.restart(); }
+          const cur = this.level.bonus ? GameState.afterBonus : this.level.id;
+          const next = ids[ids.indexOf(cur) + 1];
+          const nextWorld = next ? Levels.get(next).world : null;
+          // finished a world with every ghost mouse found -> bonus level first
+          if (!this.level.bonus && this.seesMice && nextWorld !== this.level.world && this.worldMiceComplete(this.level.world)) {
+            GameState.afterBonus = this.level.id;
+            GameState.level = Levels.bonusId;
+            this.scene.restart();
+          } else if (this.level.final) {
+            this.scene.start('finale');
+          } else if (next) { GameState.level = next; this.scene.restart(); }
           else { this.scene.start('title'); }
         }
         break;
     }
+  }
+
+  worldMiceComplete(world) {
+    for (const id of Levels.all()) {
+      const lv = Levels.get(id);
+      if (lv.world !== world) continue;
+      const total = lv.rows.join('').split('G').length - 1;
+      if (total > 0 && (GameState.mice[id] || []).length < total) return false;
+    }
+    return true;
   }
 
   showTally() {
@@ -1588,11 +2157,44 @@ class PlayScene extends Phaser.Scene {
 
     p.update(inp, dt);
 
+    if (this.parallax) {
+      const sx = this.cameras.main.scrollX;
+      const far = this.children.getByName('far'), near = this.children.getByName('near');
+      if (far) far.tilePositionX = sx * 0.25;
+      if (near) near.tilePositionX = sx * 0.55;
+    }
     if (this.cutscene) { this.updateEnding(dt); return; }
     if (p.dead) return;
 
     const cx = b.x + b.halfWidth;
     const feet = b.y + b.height;
+
+    // dog chase: the camera auto-scrolls, the dog gains when you dawdle
+    if (this.chase) {
+      const ch = this.chase, cam = this.cameras.main;
+      if (!ch.started && cx > 40) { ch.started = true; cam.stopFollow(); Sfx.bark(); }
+      if (ch.started) {
+        cam.scrollX = Math.min(cam.scrollX + PHYS.chaseScroll * dt, this.worldW - W);
+        const dog = ch.dog;
+        const target = cam.scrollX - 6;
+        const gain = (b.velocity.x < PHYS.chaseScroll * 0.8) ? PHYS.dogSpeed : PHYS.chaseScroll;
+        dog.x = Math.min(dog.x + gain * dt, Math.max(target, dog.x - 20 * dt));
+        dog.x = Math.max(dog.x, target - 40);
+        dog.y = this.floorBelow(dog.x + 8, this.mapOffsetY + 4 * TILE);
+        if (b.x < cam.scrollX - 12 || dog.x + 12 > b.x) { this.die(); return; }
+      } else { ch.dog.x = cx - 70; ch.dog.y = this.floorBelow(ch.dog.x, this.mapOffsetY + 4 * TILE); }
+    }
+
+    // bosses
+    if (this.boss && this.boss.kind === 'vacuum') this.updateVacuum(dt);
+    if (this.boss && this.boss.kind === 'bath') this.updateBath(dt);
+
+    // sprinklers and water tiles
+    for (const sp of this.sprinklers) if (sp.hitsPlayer(b)) { this.hurt(sp.x, true); break; }
+    {
+      const t1 = this.tileAt(cx, feet - 4), t2 = this.tileAt(cx, b.y + 4);
+      if ((t1 && t1.index === this.T.WATER) || (t2 && t2.index === this.T.WATER)) { Sfx.splash(); this.hurt(cx + (p.facing * 8), true); }
+    }
 
     if (b.y > this.worldH + 8) { this.die(); return; }
 
@@ -1637,7 +2239,7 @@ class PlayScene extends Phaser.Scene {
       if (!bw.done && Math.abs(cx - bw.x) < 12 && Math.abs(feet - bw.y) < 20) this.reachCheckpoint(bw);
     }
 
-    if (this.doorZone && p.grounded && Phaser.Geom.Rectangle.Contains(this.doorZone, cx, feet - 1)) this.startEnding();
+    if (this.doorZone && !this.doorLocked && (p.grounded || this.flap) && Phaser.Geom.Rectangle.Contains(this.doorZone, cx, feet - 1)) this.startEnding();
 
     if (this.debugOn) {
       const ms = s => String(Math.round(s * 1000)).padStart(3) + 'ms';
@@ -1677,7 +2279,7 @@ const game = new Phaser.Game({
     default: 'arcade',
     arcade: { gravity: { y: PHYS.gravity }, fps: 60, fixedStep: true, debug: false },
   },
-  scene: [BootScene, TitleScene, SelectScene, PlayScene, PauseScene],
+  scene: [BootScene, TitleScene, SelectScene, PlayScene, PauseScene, FinaleScene],
 });
 
 window.addEventListener('resize', () => {
