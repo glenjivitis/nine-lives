@@ -173,8 +173,149 @@ const Sprites = (() => {
   }
 
   // ------------------------------------------------------------------------
-  // Scottie (spec §1.1). Faces right; the game flips for left.
+  // Cats. Every cat is the same rig (head, body oval, four legs, collar, tail
+  // overlay) with its own parts and palette, so all cats share one animation
+  // state machine (spec §2). Art faces right; the game flips for left.
   // ------------------------------------------------------------------------
+  const FRAME_W = 32, FRAME_H = 24;
+
+  /** Recolour a frame: map = { fromChar: toChar }. */
+  function recolor(frame, map) {
+    return frame.map(row => row.split('').map(ch => (map[ch] !== undefined ? map[ch] : ch)).join(''));
+  }
+
+  /** Solid blob (no outline) w x h filled with `fill`, optional bottom shade rows. */
+  function blob(w, h, fill, shade, shadeRows = 0) {
+    const rows = [];
+    const rx = w / 2, ry = h / 2;
+    for (let y = 0; y < h; y++) {
+      let s = '';
+      for (let x = 0; x < w; x++) {
+        const dx = (x + 0.5 - rx) / rx, dy = (y + 0.5 - ry) / ry;
+        if (dx * dx + dy * dy > 1) s += '.';
+        else s += (shade && y >= h - shadeRows) ? shade : fill;
+      }
+      rows.push(s);
+    }
+    return rows;
+  }
+
+  const LEG = ['0110', '0110', '0110', '0110', '0110', '0110', '0110', '0110', '0000'];
+  const LEG_SHORT = ['0110', '0110', '0110', '0110', '0110', '0000'];
+  const LEG_TUCK = ['0110', '0110', '0110', '0000'];
+
+  // Standing legs: near-front 19, far-front 16, near-back 6, far-back 9; tops at y=15.
+  function standLegs(leg) {
+    return [
+      { art: leg, x: 16, y: 15, far: true },
+      { art: leg, x: 9, y: 15, far: true },
+      { art: leg, x: 19, y: 15 },
+      { art: leg, x: 6, y: 15 },
+    ];
+  }
+
+  function walkLegs(leg, i, n) {
+    const ph = (i / n) * Math.PI * 2;
+    const sw = Math.round(2 * Math.sin(ph));
+    const liftA = Math.cos(ph) > 0.4 ? 1 : 0;
+    const liftB = Math.cos(ph + Math.PI) > 0.4 ? 1 : 0;
+    const clamp = x => Math.max(5, Math.min(19, x));
+    return [
+      { art: leg, x: clamp(16 - sw), y: 15 - liftB, far: true },
+      { art: leg, x: clamp(9 + sw), y: 15 - liftA, far: true },
+      { art: leg, x: clamp(19 + sw), y: 15 - liftA },
+      { art: leg, x: clamp(6 - sw), y: 15 - liftB },
+    ];
+  }
+
+  function legSet(art, positions) {
+    return positions.map(([x, y, far]) => ({ art, x, y, far: !!far }));
+  }
+
+  /**
+   * One frame of a cat from part offsets.
+   * def: { head, headBlink, headEarsBack, body, bodyLong, bodySquat, leg, legShort,
+   *        legTuck, collar, collarDy, bodyX, bodyY, headX, headY, decorate(o) }
+   */
+  function catFrame(def, o) {
+    const bodyY = (def.bodyY || 8) + (o.dy || 0);
+    const headY = (def.headY || 0) + (o.dy || 0) + (o.headDy || 0);
+    const body = o.body || def.body;
+    const head = o.head || def.head;
+    const legs = o.legs;
+    const layers = [];
+    for (const L of legs.filter(l => l.far)) layers.push({ art: L.art, x: L.x, y: L.y });
+    layers.push({ art: body, x: (def.bodyX || 4) + (o.bodyDx || 0), y: bodyY, union: true });
+    if (def.decorate) layers.push(...def.decorate({ bodyY, body, o }));
+    for (const L of legs.filter(l => !l.far)) layers.push({ art: L.art, x: L.x, y: L.y, union: true });
+    layers.push({ art: head, x: (def.headX || 17) + (o.headDx || 0), y: headY, union: true });
+    layers.push({ art: def.collar, x: (def.headX || 17) + (o.headDx || 0) + (def.collarDx || 0), y: headY + (def.collarDy || 10) });
+    return compose(FRAME_W, FRAME_H, layers);
+  }
+
+  /** Build the full shared frame set for a cat. Returns the frame-name map. */
+  function buildCat(key, def) {
+    const frames = [];
+    const F = {};
+    const push = (name, f) => { F[name] = frames.length; frames.push(f); };
+    const leg = def.leg || LEG, legS = def.legShort || LEG_SHORT, legT = def.legTuck || LEG_TUCK;
+    const stand = standLegs(leg);
+
+    push('idle0', catFrame(def, { legs: stand }));
+    push('idle1', catFrame(def, { legs: stand, dy: 1 }));
+    push('idle2', catFrame(def, { legs: stand, dy: 1 }));
+    push('idle3', catFrame(def, { legs: stand }));
+    for (let i = 0; i < 6; i++) push('walk' + i, catFrame(def, { legs: walkLegs(leg, i, 6), dy: (i % 3 === 1) ? -1 : 0 }));
+    for (let i = 0; i < 6; i++) push('run' + i, catFrame(def, { legs: walkLegs(leg, i, 6), head: def.headEarsBack, dy: (i % 3 === 1) ? -1 : 0 }));
+    push('jump0', catFrame(def, { body: def.bodyLong, dy: -1, headDy: -1, legs: legSet(legS, [[17, 13, 1], [8, 15, 1], [20, 12], [5, 15]]) }));
+    push('jump1', catFrame(def, { legs: legSet(legT, [[16, 15, 1], [9, 15, 1], [19, 15], [6, 15]]) }));
+    push('fall0', catFrame(def, { legs: legSet(legS, [[17, 14, 1], [8, 14, 1], [20, 13], [5, 13]]) }));
+    push('fall1', catFrame(def, { dy: 1, legs: legSet(legS, [[17, 15, 1], [8, 15, 1], [20, 14], [5, 14]]) }));
+    push('land0', catFrame(def, { body: def.bodySquat, dy: 3, headDy: 1, legs: legSet(legS, [[16, 18, 1], [9, 18, 1], [19, 18], [6, 18]]) }));
+    push('land1', catFrame(def, { dy: 2, legs: legSet(legS, [[16, 18, 1], [9, 18, 1], [19, 18], [6, 18]]) }));
+    push('crouch', catFrame(def, { body: def.bodySquat, dy: 3, headDy: 2, legs: legSet(legS, [[16, 18, 1], [9, 18, 1], [19, 18], [6, 18]]) }));
+    push('blink', catFrame(def, { legs: stand, head: def.headBlink }));
+    push('hurt', catFrame(def, { body: def.bodyPuff || def.body, dy: -1, head: def.headEarsBack, legs: legSet(legS, [[17, 14, 1], [8, 14, 1], [20, 13], [5, 13]]) }));
+    // signature sit pose (2 frames: open eyes, blink)
+    push('sit0', def.sit(def, false));
+    push('sit1', def.sit(def, true));
+
+    makeSprite(key, frames, def.palette, { width: 32, height: 32, align: 'bottom' });
+    const tailFrames = def.tail.map(t => compose(FRAME_W, FRAME_H, [{ art: t, x: def.tailX || 0, y: def.tailY || 1 }]));
+    const tailAir = def.tailAir.map(t => compose(FRAME_W, FRAME_H, [{ art: t, x: def.tailX || 0, y: def.tailY || 1 }]));
+    makeSprite(key + '-tail', tailFrames, def.palette, { width: 32, height: 32, align: 'bottom' });
+    makeSprite(key + '-tail-air', tailAir, def.palette, { width: 32, height: 32, align: 'bottom' });
+    // portrait: 48x48 picture frame with the sit pose inside
+    const portrait = compose(48, 48, [
+      { art: rectArt(48, 48, 'a', '9') },
+      { art: rectArt(44, 44, 'b', '9'), x: 2, y: 2 },
+      { art: def.sit(def, false), x: 8, y: 14 },
+    ]);
+    makeSprite(key + '-portrait', [portrait], def.palette.concat(['#7a4a24', '#c9c1b0', '#e6d8bf']), { width: 48, height: 48 });
+    return F;
+  }
+
+  // Shared tail shapes (recoloured per cat)
+  const TAIL_SWAY = [
+    [
+      '..00........', '.0210.......', '.0110.......', '.0110.......', '.0110.......', '.0110.......', '..0110......',
+      '..0110......', '...0110.....', '....0110....', '.....0110...', '.....01100..', '......011110', '.......00000',
+    ],
+    [
+      '...00.......', '..0210......', '..0110......', '..0110......', '.0110.......', '.0110.......', '.0110.......',
+      '..0110......', '...0110.....', '....0110....', '.....0110...', '.....01100..', '......011110', '.......00000',
+    ],
+    [
+      '............', '............', '00..........', '0210........', '0110........', '.0110.......', '.0110.......',
+      '..0110......', '...0110.....', '....0110....', '.....0110...', '.....01100..', '......011110', '.......00000',
+    ],
+  ];
+  const TAIL_UP = [[
+    '.....00.....', '....0210....', '....0110....', '....0110....', '....0110....', '....0110....', '....0110....',
+    '.....0110...', '.....0110...', '......0110..', '......0110..', '......01100.', '......011110', '.......00000',
+  ]];
+
+  // --- Scottie (spec §1.1) -------------------------------------------------
   const SCOTTIE_PAL = [
     '#0b0b10', // 0 outline / deep
     '#1c1c24', // 1 body
@@ -186,8 +327,6 @@ const Sprites = (() => {
     '#f0a6c0', // 7 collar pink trim
     '#3c3c44', // 8 collar buckle
   ];
-
-  // Head with tall ears, 13 x 12. Eye at (7..8, 6..7), nose at (11, 8).
   const SC_HEAD = [
     '.00.....00...',
     '.050...0550..',
@@ -203,7 +342,6 @@ const Sprites = (() => {
     '...00000000..',
   ];
   const SC_HEAD_BLINK = SC_HEAD.map((r, i) => (i === 6 ? '0111111001110' : i === 7 ? '0111111111110' : r));
-  // Ears back (run / dash): flatter ears.
   const SC_HEAD_EARSBACK = [
     '.............',
     '00......00...',
@@ -218,210 +356,106 @@ const Sprites = (() => {
     '.001111111100',
     '...00000000..',
   ];
-
-  const SC_BODY = oval(18, 10, 2);
-  const SC_BODY_LONG = oval(20, 9, 2);   // stretched (jump)
-  const SC_BODY_SQUAT = oval(18, 8, 2);  // squashed (land / crouch)
-
-  const SC_LEG = ['0110', '0110', '0110', '0110', '0110', '0110', '0110', '0110', '0000'];
-  const SC_LEG_SHORT = ['0110', '0110', '0110', '0110', '0110', '0000'];
-  const SC_LEG_TUCK = ['0110', '0110', '0110', '0000'];
-
-  // Collar band across the neck: pink / cream (with buckle) / pink.
-  const SC_COLLAR = ['.7777', '76668', '.7777'];
-
-  // Tail (own overlay). 12 x 14, base at bottom-right tucks under the body.
-  const SC_TAIL = [
-    [
-      '..00........',
-      '.0210.......',
-      '.0110.......',
-      '.0110.......',
-      '.0110.......',
-      '.0110.......',
-      '..0110......',
-      '..0110......',
-      '...0110.....',
-      '....0110....',
-      '.....0110...',
-      '.....01100..',
-      '......011110',
-      '.......00000',
-    ],
-    [
-      '...00.......',
-      '..0210......',
-      '..0110......',
-      '..0110......',
-      '.0110.......',
-      '.0110.......',
-      '.0110.......',
-      '..0110......',
-      '...0110.....',
-      '....0110....',
-      '.....0110...',
-      '.....01100..',
-      '......011110',
-      '.......00000',
-    ],
-    [
-      '............',
-      '............',
-      '00..........',
-      '0210........',
-      '0110........',
-      '.0110.......',
-      '.0110.......',
-      '..0110......',
-      '...0110.....',
-      '....0110....',
-      '.....0110...',
-      '.....01100..',
-      '......011110',
-      '.......00000',
-    ],
-  ];
-  // Tail up (airborne)
-  const SC_TAIL_AIR = [
-    [
-      '.....00.....',
-      '....0210....',
-      '....0110....',
-      '....0110....',
-      '....0110....',
-      '....0110....',
-      '....0110....',
-      '.....0110...',
-      '.....0110...',
-      '......0110..',
-      '......0110..',
-      '......01100.',
-      '......011110',
-      '.......00000',
-    ],
-  ];
-
-  const FRAME_W = 32, FRAME_H = 24;
-
-  /** One Scottie frame from part offsets. */
-  function scottieFrame(o) {
-    const bodyY = 8 + (o.dy || 0);
-    const headY = 0 + (o.dy || 0) + (o.headDy || 0);
-    const body = o.body || SC_BODY;
-    const head = o.head || SC_HEAD;
-    const legs = o.legs; // [{art, x, y}] drawn in order (far legs first)
-    const layers = [];
-    // far legs go under the body
-    for (const L of legs.filter(l => l.far)) layers.push({ art: L.art, x: L.x, y: L.y });
-    layers.push({ art: body, x: 4 + (o.bodyDx || 0), y: bodyY, union: true });
-    for (const L of legs.filter(l => !l.far)) layers.push({ art: L.art, x: L.x, y: L.y, union: true });
-    layers.push({ art: head, x: 17 + (o.headDx || 0), y: headY, union: true });
-    layers.push({ art: SC_COLLAR, x: 17 + (o.headDx || 0), y: headY + 10 });
-    return compose(FRAME_W, FRAME_H, layers);
+  // Scottie's signature idle: the loaf, front paws stretched forward.
+  function scottieSit(def, blink) {
+    const paw = ['0000000', '0111110', '0000000'];
+    return compose(FRAME_W, FRAME_H, [
+      { art: oval(22, 9, 2), x: 3, y: 13, union: true },
+      { art: paw, x: 16, y: 21, union: true },
+      { art: paw, x: 19, y: 20, union: true },
+      { art: blink ? SC_HEAD_BLINK : SC_HEAD, x: 15, y: 6, union: true },
+      { art: def.collar, x: 15, y: 16 },
+    ]);
   }
+  const SCOTTIE = {
+    palette: SCOTTIE_PAL,
+    head: SC_HEAD, headBlink: SC_HEAD_BLINK, headEarsBack: SC_HEAD_EARSBACK,
+    body: oval(18, 10, 2), bodyLong: oval(20, 9, 2), bodySquat: oval(18, 8, 2), bodyPuff: oval(19, 12, 2),
+    collar: ['.7777', '76668', '.7777'], collarDy: 10,
+    tail: TAIL_SWAY, tailAir: TAIL_UP,
+    sit: scottieSit,
+  };
 
-  // Standing legs: near-front 19, far-front 16, near-back 6, far-back 9; tops at y=15.
-  const STAND_LEGS = [
-    { art: SC_LEG, x: 16, y: 15, far: true },
-    { art: SC_LEG, x: 9, y: 15, far: true },
-    { art: SC_LEG, x: 19, y: 15 },
-    { art: SC_LEG, x: 6, y: 15 },
+  // --- Delia (spec §1.2) -----------------------------------------------------
+  const DELIA_PAL = [
+    '#3b3d48', // 0 outline
+    '#f4f2ee', // 1 white
+    '#d9d6d0', // 2 white shade
+    '#7a7d86', // 3 gray
+    '#5c5f69', // 4 gray shade
+    '#a8c9a0', // 5 eye
+    '#e3a0b0', // 6 nose
+    '#9ec4a6', // 7 collar
+    '#f2efe6', // 8 collar tag
   ];
-
-  function walkLegs(i, n) {
-    const ph = (i / n) * Math.PI * 2;
-    const sw = Math.round(2 * Math.sin(ph));
-    const liftA = Math.cos(ph) > 0.4 ? 1 : 0;           // legs swinging forward lift
-    const liftB = Math.cos(ph + Math.PI) > 0.4 ? 1 : 0;
-    const clamp = x => Math.max(5, Math.min(19, x));      // keep leg tops inside the body oval
-    return [
-      { art: SC_LEG, x: clamp(16 - sw), y: 15 - liftB, far: true },
-      { art: SC_LEG, x: clamp(9 + sw), y: 15 - liftA, far: true },
-      { art: SC_LEG, x: clamp(19 + sw), y: 15 - liftA },
-      { art: SC_LEG, x: clamp(6 - sw), y: 15 - liftB },
-    ];
+  // Gray cap over the top of the head and both ears, white blaze down the front.
+  const DL_HEAD = [
+    '.00.....00...',
+    '.040...0440..',
+    '.0440.04440..',
+    '.04430044310.',
+    '0333333331110',
+    '0333333311110',
+    '0111111501110',
+    '0111111501110',
+    '0111111111160',
+    '.011111111110',
+    '.002111111200',
+    '...00000000..',
+  ];
+  const DL_HEAD_BLINK = DL_HEAD.map((r, i) => (i === 6 ? '0111111001110' : i === 7 ? '0111111111110' : r));
+  const DL_HEAD_EARSBACK = [
+    '.............',
+    '00......00...',
+    '0440...0440..',
+    '.04430044310.',
+    '0333333331110',
+    '0333333311110',
+    '0111111501110',
+    '0111111501110',
+    '0111111111160',
+    '.011111111110',
+    '.002111111200',
+    '...00000000..',
+  ];
+  // saddle patch: gray oval on the upper back, behind the shoulders
+  const DL_SADDLE = blob(10, 6, '3', '4', 1);
+  const DL_SADDLE_SQUAT = blob(10, 5, '3', '4', 1);
+  function deliaDecorate({ bodyY, body }) {
+    const squat = body.length <= 8;
+    return [{ art: squat ? DL_SADDLE_SQUAT : DL_SADDLE, x: 5, y: bodyY + 1 }];
   }
-
-  function buildScottie() {
-    const frames = [];
-    const F = {};
-    const push = (name, f) => { F[name] = frames.length; frames.push(f); };
-
-    // idle (4): breathe — body/head sink 1px on frames 1-2
-    push('idle0', scottieFrame({ legs: STAND_LEGS }));
-    push('idle1', scottieFrame({ legs: STAND_LEGS, dy: 1 }));
-    push('idle2', scottieFrame({ legs: STAND_LEGS, dy: 1 }));
-    push('idle3', scottieFrame({ legs: STAND_LEGS }));
-    // walk (6)
-    for (let i = 0; i < 6; i++) push('walk' + i, scottieFrame({ legs: walkLegs(i, 6), dy: (i % 3 === 1) ? -1 : 0 }));
-    // run (6): ears back, bigger stride
-    for (let i = 0; i < 6; i++) {
-      push('run' + i, scottieFrame({ legs: walkLegs(i, 6), head: SC_HEAD_EARSBACK, dy: (i % 3 === 1) ? -1 : 0 }));
-    }
-    // jump (2): stretch (front paws reach forward, back legs trail), tuck
-    push('jump0', scottieFrame({
-      body: SC_BODY_LONG, dy: -1, headDy: -1,
-      legs: [
-        { art: SC_LEG_SHORT, x: 17, y: 13, far: true }, { art: SC_LEG_SHORT, x: 8, y: 15, far: true },
-        { art: SC_LEG_SHORT, x: 20, y: 12 }, { art: SC_LEG_SHORT, x: 5, y: 15 },
-      ],
-    }));
-    push('jump1', scottieFrame({
-      legs: [
-        { art: SC_LEG_TUCK, x: 16, y: 15, far: true }, { art: SC_LEG_TUCK, x: 9, y: 15, far: true },
-        { art: SC_LEG_TUCK, x: 19, y: 15 }, { art: SC_LEG_TUCK, x: 6, y: 15 },
-      ],
-    }));
-    // fall (2): limbs spread
-    push('fall0', scottieFrame({
-      legs: [
-        { art: SC_LEG_SHORT, x: 17, y: 14, far: true }, { art: SC_LEG_SHORT, x: 8, y: 14, far: true },
-        { art: SC_LEG_SHORT, x: 20, y: 13 }, { art: SC_LEG_SHORT, x: 5, y: 13 },
-      ],
-    }));
-    push('fall1', scottieFrame({
-      dy: 1,
-      legs: [
-        { art: SC_LEG_SHORT, x: 17, y: 15, far: true }, { art: SC_LEG_SHORT, x: 8, y: 15, far: true },
-        { art: SC_LEG_SHORT, x: 20, y: 14 }, { art: SC_LEG_SHORT, x: 5, y: 14 },
-      ],
-    }));
-    // land (2): squat, then half
-    push('land0', scottieFrame({
-      body: SC_BODY_SQUAT, dy: 3, headDy: 1,
-      legs: [
-        { art: SC_LEG_SHORT, x: 16, y: 18, far: true }, { art: SC_LEG_SHORT, x: 9, y: 18, far: true },
-        { art: SC_LEG_SHORT, x: 19, y: 18 }, { art: SC_LEG_SHORT, x: 6, y: 18 },
-      ],
-    }));
-    push('land1', scottieFrame({
-      dy: 2,
-      legs: [
-        { art: SC_LEG_SHORT, x: 16, y: 18, far: true }, { art: SC_LEG_SHORT, x: 9, y: 18, far: true },
-        { art: SC_LEG_SHORT, x: 19, y: 18 }, { art: SC_LEG_SHORT, x: 6, y: 18 },
-      ],
-    }));
-    // crouch (1)
-    push('crouch', scottieFrame({
-      body: SC_BODY_SQUAT, dy: 3, headDy: 2,
-      legs: [
-        { art: SC_LEG_SHORT, x: 16, y: 18, far: true }, { art: SC_LEG_SHORT, x: 9, y: 18, far: true },
-        { art: SC_LEG_SHORT, x: 19, y: 18 }, { art: SC_LEG_SHORT, x: 6, y: 18 },
-      ],
-    }));
-    // blink
-    push('blink', scottieFrame({ legs: STAND_LEGS, head: SC_HEAD_BLINK }));
-
-    makeSprite('scottie', frames, SCOTTIE_PAL, { width: 32, height: 32, align: 'bottom' });
-
-    // tail overlays, same frame space so they sit on the same origin
-    const tailFrames = SC_TAIL.map(t => compose(FRAME_W, FRAME_H, [{ art: t, x: 0, y: 1 }]));
-    const tailAir = SC_TAIL_AIR.map(t => compose(FRAME_W, FRAME_H, [{ art: t, x: 0, y: 1 }]));
-    makeSprite('scottie-tail', tailFrames, SCOTTIE_PAL, { width: 32, height: 32, align: 'bottom' });
-    makeSprite('scottie-tail-air', tailAir, SCOTTIE_PAL, { width: 32, height: 32, align: 'bottom' });
-
-    return F;
+  // Delia's signature idle: sitting upright, looking back over her shoulder,
+  // tail curled around the front paws.
+  function deliaSit(def, blink) {
+    const headArt = flipFrame(blink ? DL_HEAD_BLINK : DL_HEAD);
+    const tailCurl = ['.....0000000', '....03333333', '...033444444', '...0000000..'];
+    const bodyUp = oval(12, 13, 0);
+    return compose(FRAME_W, FRAME_H, [
+      { art: bodyUp, x: 9, y: 9, union: true },
+      { art: blob(8, 7, '3', '4', 1), x: 9, y: 10 },
+      { art: LEG_SHORT, x: 14, y: 17, union: true },
+      { art: LEG_SHORT, x: 18, y: 17, union: true },
+      { art: tailCurl, x: 10, y: 20, union: true },
+      { art: headArt, x: 6, y: 1, union: true },
+      { art: flipFrame(def.collar), x: 8, y: 11 },
+    ]);
   }
+  const DELIA = {
+    palette: DELIA_PAL,
+    head: DL_HEAD, headBlink: DL_HEAD_BLINK, headEarsBack: DL_HEAD_EARSBACK,
+    body: oval(18, 11, 0), bodyLong: oval(20, 10, 0), bodySquat: oval(18, 9, 0), bodyPuff: oval(19, 13, 0),
+    bodyY: 7,
+    collar: ['.7777', '77787', '.7777'], collarDy: 10,
+    tail: TAIL_SWAY.map(t => recolor(t, { 1: '3', 2: '4' })),
+    tailAir: TAIL_UP.map(t => recolor(t, { 1: '3', 2: '4' })),
+    decorate: deliaDecorate,
+    sit: deliaSit,
+  };
+
+  function buildScottie() { return buildCat('scottie', SCOTTIE); }
+  function buildDelia() { return buildCat('delia', DELIA); }
+
 
   // ------------------------------------------------------------------------
   // World 1 tileset (16x16). Index order matters: see TILE below.
@@ -998,10 +1032,11 @@ const Sprites = (() => {
     buildEnemies();
     buildHumans();
     FRAMES.scottie = buildScottie();
+    FRAMES.delia = buildDelia();
   }
 
   return {
-    setTextureManager, makeSprite, flipFrame, addAnim, compose, stamp, oval, blank,
+    setTextureManager, makeSprite, flipFrame, addAnim, compose, stamp, oval, blob, blank, recolor, rectArt,
     parseColor, buildAll, installFont, TILE, FRAMES, FONT_CHARS,
   };
 })();

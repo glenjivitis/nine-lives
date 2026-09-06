@@ -1,8 +1,7 @@
 // game.js — Nine Lives
-// Phase 2: level 1-1 complete. Roomba, Cucumber, paw blocks + tuna (Super),
-// hurt/knockback, lives, death/respawn, checkpoint, thumbtacks, pits,
-// curtain climbing, Glen & Em door ending, touch controls, procedural SFX.
-// All feel tunables live under PHYS.
+// Phase 3: title, character select (Scottie + Delia), pause, cat passives
+// (Shadow + double jump, Float + ghost mice) on top of the complete level
+// 1-1 from phase 2. All feel tunables live under PHYS.
 
 const W = 320;
 const H = 180;
@@ -21,6 +20,7 @@ const PHYS = {
   jumpVel: -380,
   doubleJumpVel: -320,
   floatGravity: 0.4,
+  floatMaxFall: 130,
   dashSpeed: 260,
   dashTime: 0.18,
   dashCooldown: 0.6,
@@ -32,6 +32,7 @@ const PHYS = {
   jumpBuffer: 0.120,
   jumpCutMul: 0.5,
   runAnimThreshold: 0.7,
+  shadowDelay: 0.5,
 
   maxFall: 450,
   airControl: 1.0,
@@ -52,7 +53,18 @@ const GameState = {
   level: '1-1',
   checkpoint: null,   // { level, x, y }
   super: false,
+  mice: {},           // level id -> [collected indices]
 };
+
+function resetRun(catKey) {
+  GameState.cat = catKey;
+  GameState.lives = 9;
+  GameState.kibble = 0;
+  GameState.level = Levels.all()[0];
+  GameState.checkpoint = null;
+  GameState.super = false;
+  GameState.mice = {};
+}
 
 function approach(value, target, step) {
   if (value < target) return Math.min(value + step, target);
@@ -118,25 +130,35 @@ const Sfx = (() => {
     checkpoint() { [660, 880].forEach((f, i) => tone({ f0: f, dur: 0.1, vol: 0.08, delay: i * 0.09 })); },
     door()   { noise(0.4, 0.06, 300); [523, 659, 784, 1046].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.25, vol: 0.10, delay: 0.3 + i * 0.12 })); },
     life()   { this.purr(); },
+    mouse()  { [1200, 1600, 2000].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.08, vol: 0.06, delay: i * 0.06 })); },
+    meow()   { tone({ type: 'square', f0: 620, f1: 880, dur: 0.14, vol: 0.10 }); tone({ type: 'square', f0: 880, f1: 480, dur: 0.22, vol: 0.10, delay: 0.14 }); },
+    chime()  { [784, 988, 1175, 1568].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.35, vol: 0.08, delay: i * 0.1 })); },
+    select() { tone({ f0: 500, f1: 700, dur: 0.05, vol: 0.06 }); },
+    pause()  { tone({ f0: 600, f1: 300, dur: 0.12, vol: 0.08 }); },
   };
 })();
 
 // ---------------------------------------------------------------------------
-// Cat definitions
+// Cat definitions (spec §1). Passives: shadow, double, float, ghost.
 // ---------------------------------------------------------------------------
 const CATS = {
-  scottie: { name: 'SCOTTIE', texture: 'scottie', tail: 'scottie-tail', tailAir: 'scottie-tail-air' },
+  scottie: { name: 'SCOTTIE', texture: 'scottie', passives: ['shadow', 'double'], sound: 'meow', blurb: 'SHADOW: STAND STILL TO VANISH' },
+  delia:   { name: 'DELIA', texture: 'delia', passives: ['float', 'ghost'], sound: 'chime', blurb: 'FLOAT: HOLD JUMP. SEES GHOST MICE' },
 };
+const CAT_ORDER = ['scottie', 'delia'];
 
-function registerAnims(scene, catKey) {
-  const cat = CATS[catKey];
-  const F = Sprites.FRAMES[cat.texture];
-  const A = (name, from, to, fps, repeat) => Sprites.addAnim(scene, cat.texture + '-' + name, cat.texture, F[from], F[to], fps, repeat);
-  A('idle', 'idle0', 'idle3', 4, -1);
-  A('walk', 'walk0', 'walk5', 10, -1);
-  A('run', 'run0', 'run5', 14, -1);
-  A('land', 'land0', 'land1', 12, 0);
-  Sprites.addAnim(scene, cat.tail + '-sway', cat.tail, 0, 2, 5, -1);
+function registerAnims(scene) {
+  for (const key of Object.keys(CATS)) {
+    const cat = CATS[key];
+    const F = Sprites.FRAMES[cat.texture];
+    const A = (name, from, to, fps, repeat) => Sprites.addAnim(scene, cat.texture + '-' + name, cat.texture, F[from], F[to], fps, repeat);
+    A('idle', 'idle0', 'idle3', 4, -1);
+    A('walk', 'walk0', 'walk5', 10, -1);
+    A('run', 'run0', 'run5', 14, -1);
+    A('land', 'land0', 'land1', 12, 0);
+    A('sit', 'sit0', 'sit1', 2, -1);
+    Sprites.addAnim(scene, cat.texture + '-tail-sway', cat.texture + '-tail', 0, 2, 5, -1);
+  }
   Sprites.addAnim(scene, 'dust-puff', 'dust', 0, 3, 16, 0);
   Sprites.addAnim(scene, 'kibble-glint', 'kibble', 0, 1, 2, -1);
   Sprites.addAnim(scene, 'roomba-idle', 'roomba', 0, 1, 3, -1);
@@ -148,6 +170,22 @@ function registerAnims(scene, catKey) {
     Sprites.addAnim(scene, who + '-pet', who, G.pet0, G.pet2, 4, -1);
     Sprites.addAnim(scene, who + '-hug', who, G.hug0, G.hug1, 2, -1);
   }
+}
+
+/** Decorative cat (title / select / pause): body + tail overlay, no physics. */
+function makeCatActor(scene, catKey, x, y, depth = 10) {
+  const cat = CATS[catKey];
+  const tail = scene.add.sprite(x, y, cat.texture + '-tail').setOrigin(0.5, 1).setDepth(depth);
+  const body = scene.add.sprite(x, y, cat.texture).setOrigin(0.5, 1).setDepth(depth + 1);
+  tail.play(cat.texture + '-tail-sway');
+  return {
+    body, tail, cat,
+    setPos(nx, ny) { body.x = nx; tail.x = nx; body.y = ny; tail.y = ny; },
+    setFlip(f) { body.setFlipX(f); tail.setFlipX(f); },
+    play(name) { body.play(cat.texture + '-' + name); },
+    sit() { body.play(cat.texture + '-sit'); tail.setVisible(false); },
+    destroy() { body.destroy(); tail.destroy(); },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -167,9 +205,10 @@ class Player {
     this.body.setMaxVelocityY(PHYS.maxFall);
     this.body.setCollideWorldBounds(true);
 
-    this.tail = scene.add.sprite(x, groundY, this.cat.tail).setOrigin(0.5, 1).setDepth(10);
+    this.tail = scene.add.sprite(x, groundY, this.cat.texture + '-tail').setOrigin(0.5, 1).setDepth(10);
     this.sprite = scene.add.sprite(x, groundY, this.cat.texture).setOrigin(0.5, 1).setDepth(11);
-    this.tail.play(this.cat.tail + '-sway');
+    this.glint = scene.add.image(x, groundY, 'glint').setDepth(12).setVisible(false);
+    this.tail.play(this.cat.texture + '-tail-sway');
 
     this.facing = 1;
     this.coyote = 0;
@@ -199,13 +238,21 @@ class Player {
     this.hurtTimer = 0;
     this.dead = false;
     this.climbing = false;
-    this.autoInput = null;      // cutscene control: fn(inp) -> inp
+    this.autoInput = null;
     this.speedScale = 1;
     this.locked = false;
-    this.visualDx = 0;          // cutscene-only visual nudge (leg rubbing)
-    this.forceAnim = null;      // cutscene-only animation override
+    this.visualDx = 0;
+    this.forceAnim = null;
+
+    // passives
+    this.doubleUsed = false;
+    this.floating = false;
+    this.stillTime = 0;
+    this.shadow = false;
     this.setSuper(GameState.super, true);
   }
+
+  has(passive) { return this.cat.passives.includes(passive); }
 
   respawn() {
     this.body.reset(this.spawn.x, this.spawn.y);
@@ -235,7 +282,6 @@ class Player {
   }
 
   launch(dir) {
-    // cucumber gag: two tiles backwards, no damage
     this.body.setVelocity(dir * 150, -210);
     this.hurtTimer = 0.45;
     this.dashTime = 0;
@@ -248,6 +294,7 @@ class Player {
     this.body.setVelocity(0, 0);
     this.jumping = false;
     this.dashTime = 0;
+    this.doubleUsed = false;
   }
 
   stopClimb() {
@@ -261,12 +308,6 @@ class Player {
     let inp = rawInp;
     if (this.autoInput) inp = this.autoInput(rawInp, dt);
     if (this.hurtTimer > 0) { this.hurtTimer -= dt; inp = NO_INPUT; }
-    if (this.invuln > 0) {
-      this.invuln -= dt;
-      const on = Math.floor(this.invuln * 16) % 2 === 0;
-      this.sprite.setAlpha(on ? 1 : 0.35); this.tail.setAlpha(on ? 1 : 0.35);
-      if (this.invuln <= 0) { this.sprite.setAlpha(1); this.tail.setAlpha(1); }
-    }
     this.jumpHeld = inp.jump;
 
     const b = this.body;
@@ -283,7 +324,7 @@ class Player {
     this.buffer = inp.jumpPressed ? PHYS.jumpBuffer : Math.max(0, this.buffer - dt);
 
     if (justLanded && this.lastVy > 50) this.onLand(this.lastVy);
-    if (grounded) { this.jumping = false; this.jumpCut = false; }
+    if (grounded) { this.jumping = false; this.jumpCut = false; this.doubleUsed = false; }
 
     // --- curtain climbing ---------------------------------------------------
     const onCurtain = this.scene.curtainAt(cx, cy) || this.scene.curtainAt(cx, b.y + 2);
@@ -304,6 +345,7 @@ class Player {
         b.setVelocity(dir * 40, vy);
         this.state = 'climb';
         this.grounded = false;
+        this.setShadow(false);
         this.animate('climb', vy, dt);
         this.placeVisuals();
         return;
@@ -354,22 +396,47 @@ class Player {
       this.jumping = true;
       this.jumpCut = false;
       this.onJump();
+    } else if (inp.jumpPressed && !grounded && this.has('double') && !this.doubleUsed && this.hurtTimer <= 0) {
+      // Scottie's double jump
+      this.jumpSource = 'DOUBLE';
+      this.jumpFlash = 0.8;
+      vy = PHYS.doubleJumpVel;
+      this.buffer = 0;
+      this.doubleUsed = true;
+      this.jumping = true;
+      this.jumpCut = false;
+      this.onJump();
+      this.scene.dust(cx - 4, b.y + b.height, -1);
+      this.scene.dust(cx + 4, b.y + b.height, 1);
     }
     if (this.jumping && !this.jumpCut && !inp.jump && vy < 0) {
       vy *= PHYS.jumpCutMul;
       this.jumpCut = true;
     }
 
+    // Delia's float: hold jump while falling for 40% gravity
+    const wantFloat = this.has('float') && !grounded && vy > 0 && inp.jump && this.hurtTimer <= 0;
+    if (wantFloat !== this.floating) {
+      this.floating = wantFloat;
+      b.setGravityY(wantFloat ? -PHYS.gravity * (1 - PHYS.floatGravity) : 0);
+    }
+    if (this.floating) vy = Math.min(vy, PHYS.floatMaxFall);
+
     b.setVelocity(vx, vy);
     this.lastVy = vy;
     this.lastVx = vx;
+
+    // Scottie's shadow: motionless on the ground for 0.5s -> enemies ignore her
+    const still = grounded && dir === 0 && Math.abs(vx) < 1 && this.dashTime <= 0 && this.hurtTimer <= 0;
+    this.stillTime = still ? this.stillTime + dt : 0;
+    this.setShadow(this.has('shadow') && this.stillTime >= PHYS.shadowDelay);
 
     // --- animation state -------------------------------------------------------
     let state;
     if (this.hurtTimer > 0)                     state = 'hurt';
     else if (this.dashTime > 0)                 state = 'dash';
     else if (this.jumping && vy < 0)            state = 'jump';
-    else if (!grounded)                         state = vy < 0 ? 'jump' : 'fall';
+    else if (!grounded)                         state = this.floating ? 'float' : (vy < 0 ? 'jump' : 'fall');
     else if (this.landTimer > 0)                state = 'land';
     else if (crouching)                         state = 'crouch';
     else if (Math.abs(vx) > PHYS.runMax * PHYS.runAnimThreshold) state = 'run';
@@ -383,6 +450,13 @@ class Player {
     this.placeVisuals();
   }
 
+  setShadow(on) {
+    if (on === this.shadow) return;
+    this.shadow = on;
+    this.glint.setVisible(on);
+    if (!on && this.invuln <= 0) { this.sprite.setAlpha(1); this.tail.setAlpha(1); }
+  }
+
   placeVisuals() {
     const b = this.body;
     const px = b.x + b.halfWidth + this.visualDx, py = b.y + b.height;
@@ -391,6 +465,22 @@ class Player {
     const flip = this.facing < 0;
     this.sprite.setFlipX(flip);
     this.tail.setFlipX(flip);
+
+    // alpha: invulnerability blink beats shadow
+    if (this.invuln > 0) {
+      this.invuln -= this.scene.dt;
+      const on = Math.floor(this.invuln * 16) % 2 === 0;
+      this.sprite.setAlpha(on ? 1 : 0.35); this.tail.setAlpha(on ? 1 : 0.35);
+      if (this.invuln <= 0) { this.sprite.setAlpha(1); this.tail.setAlpha(1); }
+    } else if (this.shadow) {
+      this.sprite.setAlpha(0.5); this.tail.setAlpha(0.5);
+    }
+    if (this.shadow) {
+      const s = this.baseScale;
+      this.glint.x = px + this.facing * 8 * s;
+      this.glint.y = py - 18 * s;
+      this.glint.setVisible(Math.floor(this.scene.time.now / 400) % 3 !== 2);
+    }
   }
 
   animate(state, vy, dt) {
@@ -401,7 +491,6 @@ class Player {
     if (this.forceAnim) state = this.forceAnim;
     switch (state) {
       case 'idle':
-      case 'sit-loaf':
         this.blinkTimer -= dt;
         if (this.blinkHold > 0) {
           this.blinkHold -= dt;
@@ -412,25 +501,33 @@ class Player {
           if (this.blinkTimer <= 0) { this.blinkTimer = 3 + Math.random(); this.blinkHold = 0.12; }
         }
         break;
+      case 'sit-loaf': play(t + '-sit'); break;
       case 'walk': play(t + '-walk'); break;
       case 'run': play(t + '-run'); break;
       case 'dash': frame('jump0'); break;
       case 'jump': frame(vy < -150 ? 'jump0' : 'jump1'); break;
       case 'fall': frame(vy < 250 ? 'fall0' : 'fall1'); break;
+      case 'float': frame('fall0'); break;
       case 'land': play(t + '-land'); break;
       case 'crouch': frame('crouch'); break;
-      case 'hurt': frame('fall1'); break;
+      case 'hurt': frame('hurt'); break;
       case 'climb':
         if (vy !== 0) play(t + '-walk'); else frame('fall0');
         break;
     }
 
-    const airborne = state === 'jump' || state === 'fall' || state === 'dash' || state === 'hurt' || state === 'climb';
-    if (airborne) {
-      if (this.tail.texture.key !== this.cat.tailAir) { this.tail.anims.stop(); this.tail.setTexture(this.cat.tailAir, 0); }
-    } else if (this.tail.texture.key !== this.cat.tail) {
-      this.tail.setTexture(this.cat.tail, 0);
-      this.tail.play(this.cat.tail + '-sway');
+    const airborne = state === 'jump' || state === 'fall' || state === 'float' || state === 'dash' || state === 'hurt' || state === 'climb';
+    const tailKey = t + '-tail', tailAirKey = t + '-tail-air';
+    if (state === 'sit-loaf') {
+      this.tail.setVisible(false);
+    } else {
+      this.tail.setVisible(true);
+      if (airborne) {
+        if (this.tail.texture.key !== tailAirKey) { this.tail.anims.stop(); this.tail.setTexture(tailAirKey, 0); }
+      } else if (this.tail.texture.key !== tailKey) {
+        this.tail.setTexture(tailKey, 0);
+        this.tail.play(tailKey + '-sway');
+      }
     }
   }
 
@@ -509,7 +606,6 @@ class Item extends Phaser.Physics.Arcade.Sprite {
     this.body.setAllowGravity(false);
     this.body.enable = false;
     this.rising = true;
-    // rise out of the block, then start rolling
     scene.tweens.add({
       targets: this, y: y - 16, duration: 450, ease: 'Sine.easeOut',
       onComplete: () => {
@@ -535,7 +631,7 @@ class Item extends Phaser.Physics.Arcade.Sprite {
 // HUD (spec §8)
 // ---------------------------------------------------------------------------
 class Hud {
-  constructor(scene) {
+  constructor(scene, showMice) {
     this.scene = scene;
     const d = 1000;
     this.lifeIcon = scene.add.image(4, 4, 'icon-life').setOrigin(0).setScrollFactor(0).setDepth(d);
@@ -544,6 +640,10 @@ class Hud {
     this.kibbleText = this.text(44, 4);
     this.slot = scene.add.rectangle(74, 3, 14, 12).setOrigin(0).setStrokeStyle(1, 0x3a2a1a, 0.6).setScrollFactor(0).setDepth(d);
     this.slotIcon = scene.add.image(81, 9, 'tuna').setScrollFactor(0).setDepth(d + 1).setVisible(false);
+    if (showMice) {
+      this.miceIcon = scene.add.image(W - 40, 4, 'icon-mouse').setOrigin(0).setScrollFactor(0).setDepth(d);
+      this.miceText = this.text(W - 30, 4);
+    }
     this.refresh();
   }
 
@@ -557,11 +657,15 @@ class Hud {
     this.lifeText.set('x' + GameState.lives);
     this.kibbleText.set(String(GameState.kibble).padStart(3, '0'));
     this.slotIcon.setVisible(!!GameState.super);
+    if (this.miceText) {
+      const got = (GameState.mice[this.scene.level.id] || []).length;
+      this.miceText.set(got + '/' + this.scene.miceTotal);
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// Touch controls (spec §0): left, right, jump, action.
+// Touch controls (spec §0): left, right, jump, action (+ pause corner).
 // ---------------------------------------------------------------------------
 class TouchControls {
   constructor(scene) {
@@ -591,6 +695,11 @@ class TouchControls {
     mk(54, 120, 44, 54, '>', 'right');
     mk(222, 120, 44, 54, 'B', 'action');
     mk(270, 120, 44, 54, 'A', 'jump');
+    // pause corner
+    const pr = scene.add.rectangle(W - 18, 2, 16, 14, 0x000000, 0.16).setOrigin(0).setScrollFactor(0).setDepth(2000).setInteractive();
+    const pt = scene.add.bitmapText(W - 10, 9, 'font', 'II').setOrigin(0.5).setScrollFactor(0).setDepth(2001).setAlpha(0.7).setTint(0x000000);
+    pr.on('pointerdown', () => scene.togglePause());
+    this.objects.push(pr, pt);
   }
   consume() {
     const s = { ...this.state };
@@ -602,22 +711,229 @@ class TouchControls {
 }
 
 // ---------------------------------------------------------------------------
+// Boot: build every texture once, then go to the title.
+// ---------------------------------------------------------------------------
+class BootScene extends Phaser.Scene {
+  constructor() { super('boot'); }
+  create() {
+    Sprites.setTextureManager(this.textures);
+    Sprites.buildAll();
+    Sprites.installFont(this);
+    // small extras
+    Sprites.makeSprite('glint', [['00', '00']], ['#ffe66a']);
+    Sprites.makeSprite('star', [
+      ['..0..', '..0..', '00100', '..0..', '..0..'],
+      ['.....', '..0..', '.010.', '..0..', '.....'],
+      ['..0..', '.....', '0.1.0', '.....', '..0..'],
+    ], ['#fff4dc', '#ffffff']);
+    Sprites.makeSprite('paw-cursor', [[
+      '..00..00..',
+      '.0110.0110',
+      '.0110.0110',
+      '00..0000..',
+      '0110.00...',
+      '0110.0110.',
+      '.00.011110',
+      '....011110',
+      '....011110',
+      '.....0000.',
+    ]], ['#3a2a1a', '#f2c94c']);
+    registerAnims(this);
+    Sprites.addAnim(this, 'star-twinkle', 'star', 0, 2, 4, -1);
+    this.scene.start('title');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Title (spec §8): chunky title, cats walking across the bottom, press any key.
+// ---------------------------------------------------------------------------
+class TitleScene extends Phaser.Scene {
+  constructor() { super('title'); }
+  create() {
+    this.cameras.main.setBackgroundColor('#e6d8bf');
+    const g = this.add.graphics();
+    g.fillStyle(0xd9c7a6, 1);
+    for (let x = 0; x < W; x += 32) g.fillRect(x, 0, 8, H);
+    g.fillStyle(0xb89a70, 1); g.fillRect(0, 150, W, 6);
+    g.fillStyle(0x8c6d48, 1); g.fillRect(0, 155, W, 1);
+    this.add.tileSprite(0, 156, W, 24, 'tiles', Sprites.TILE.FLOOR_TOP).setOrigin(0);
+
+    const title = 'NINE LIVES';
+    this.add.bitmapText(W / 2 + 3, 46 + 3, 'font', title).setOrigin(0.5).setScale(3).setTint(0x3a2414);
+    this.add.bitmapText(W / 2, 46, 'font', title).setOrigin(0.5).setScale(3).setTint(0xf2c94c);
+    this.add.bitmapText(W / 2, 74, 'font', 'A CAT PLATFORMER').setOrigin(0.5).setTint(0x6b4a2a);
+    const isTouch = this.sys.game.device.input.touch;
+    this.prompt = this.add.bitmapText(W / 2, 112, 'font', isTouch ? 'TAP TO START' : 'PRESS ANY KEY').setOrigin(0.5).setTint(0x3a2414);
+
+    // cats parade across the bottom
+    this.cats = [];
+    CAT_ORDER.forEach((key, i) => {
+      const a = makeCatActor(this, key, 60 + i * 90, 156);
+      a.play('walk');
+      a.speed = 38 + i * 6;
+      this.cats.push(a);
+    });
+
+    const go = () => {
+      if (this.started) return;
+      this.started = true;
+      Sfx.unlock();
+      Sfx.select();
+      this.cameras.main.fadeOut(250, 230, 216, 191);
+      this.time.delayedCall(260, () => this.scene.start('select'));
+    };
+    this.input.keyboard.once('keydown', go);
+    this.input.once('pointerdown', go);
+  }
+  update(time, delta) {
+    this.prompt.setVisible(Math.floor(time / 500) % 2 === 0);
+    for (const a of this.cats) {
+      const x = a.body.x + a.speed * delta / 1000;
+      a.setPos(x > W + 20 ? -20 : x, 156);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Character select (spec §1): portraits on a windowsill, sparkle on Delia.
+// ---------------------------------------------------------------------------
+class SelectScene extends Phaser.Scene {
+  constructor() { super('select'); }
+  create() {
+    this.cameras.main.setBackgroundColor('#e6d8bf');
+    this.cameras.main.fadeIn(250, 230, 216, 191);
+    const g = this.add.graphics();
+    g.fillStyle(0xd9c7a6, 1);
+    for (let x = 0; x < W; x += 32) g.fillRect(x, 0, 8, H);
+    // window
+    g.fillStyle(0xf4f1e8, 1); g.fillRect(24, 12, W - 48, 108);
+    g.fillStyle(0x9fc8e8, 1); g.fillRect(28, 16, W - 56, 100);
+    g.fillStyle(0xbfe0f4, 1); g.fillRect(28, 16, W - 56, 30);
+    g.fillStyle(0x6b8f4a, 1); g.fillCircle(70, 70, 22); g.fillCircle(50, 84, 16); g.fillCircle(255, 62, 20); g.fillCircle(280, 80, 14);
+    g.fillStyle(0x6b4a2a, 1); g.fillRect(66, 84, 6, 32); g.fillRect(252, 78, 5, 38);
+    g.fillStyle(0xf4f1e8, 1); g.fillRect(W / 2 - 2, 16, 4, 100); g.fillRect(28, 64, W - 56, 4);
+    // sill
+    g.fillStyle(0xb8844d, 1); g.fillRect(16, 118, W - 32, 10);
+    g.fillStyle(0xd9a765, 1); g.fillRect(16, 118, W - 32, 2);
+    g.fillStyle(0x4a2f1a, 1); g.fillRect(16, 127, W - 32, 2);
+
+    this.add.bitmapText(W / 2, 6, 'font', 'CHOOSE YOUR CAT').setOrigin(0.5, 0).setTint(0x3a2414);
+
+    this.keys = CAT_ORDER;
+    const n = this.keys.length;
+    const spacing = 64;
+    const x0 = W / 2 - (n - 1) * spacing / 2;
+    this.slots = this.keys.map((key, i) => {
+      const x = x0 + i * spacing, y = 118;
+      const img = this.add.image(x, y, key + '-portrait').setOrigin(0.5, 1).setInteractive();
+      const name = this.add.bitmapText(x, y + 13, 'font', CATS[key].name).setOrigin(0.5, 0).setTint(0x3a2414);
+      img.on('pointerdown', () => { if (this.index === i) this.choose(); else { this.index = i; Sfx.select(); } });
+      return { key, x, y, img, name };
+    });
+    this.cursor = this.add.rectangle(0, 0, 52, 52).setStrokeStyle(2, 0xf2c94c, 1).setOrigin(0.5, 1);
+    this.paw = this.add.image(0, 0, 'paw-cursor').setOrigin(0.5, 1);
+    this.blurb = this.add.bitmapText(W / 2, 144, 'font', '').setOrigin(0.5, 0).setTint(0x6b4a2a);
+    this.hint = this.add.bitmapText(W / 2, 166, 'font', this.sys.game.device.input.touch ? 'TAP A CAT TWICE' : 'ARROWS  +  SPACE').setOrigin(0.5, 0).setTint(0x8c6d48);
+
+    // Delia's slow 3-star sparkle
+    const delia = this.slots.find(s => s.key === 'delia');
+    this.stars = [];
+    if (delia) {
+      for (let i = 0; i < 3; i++) {
+        const s = this.add.sprite(delia.x, delia.y - 24, 'star').setDepth(5);
+        s.play({ key: 'star-twinkle', delay: i * 250 });
+        this.stars.push(s);
+      }
+    }
+
+    this.index = Math.max(0, this.keys.indexOf(GameState.cat));
+    this.chosen = false;
+    const kb = this.input.keyboard;
+    this.kLeft = kb.addKey('LEFT'); this.kRight = kb.addKey('RIGHT');
+    this.kA = kb.addKey('A'); this.kD = kb.addKey('D');
+    this.kSpace = kb.addKey('SPACE'); this.kEnter = kb.addKey('ENTER');
+    this.t = 0;
+  }
+
+  choose() {
+    if (this.chosen) return;
+    this.chosen = true;
+    const key = this.keys[this.index];
+    Sfx.unlock();
+    if (CATS[key].sound === 'chime') Sfx.chime(); else Sfx.meow();
+    const slot = this.slots[this.index];
+    this.tweens.add({ targets: slot.img, scaleX: 1.15, scaleY: 1.15, duration: 120, yoyo: true, repeat: 2 });
+    resetRun(key);
+    this.time.delayedCall(900, () => {
+      this.cameras.main.fadeOut(250, 0, 0, 0);
+      this.time.delayedCall(260, () => this.scene.start('play'));
+    });
+  }
+
+  update(time, delta) {
+    const JD = Phaser.Input.Keyboard.JustDown;
+    if (!this.chosen) {
+      if (JD(this.kLeft) || JD(this.kA)) { this.index = (this.index + this.keys.length - 1) % this.keys.length; Sfx.select(); }
+      if (JD(this.kRight) || JD(this.kD)) { this.index = (this.index + 1) % this.keys.length; Sfx.select(); }
+      if (JD(this.kSpace) || JD(this.kEnter)) this.choose();
+    }
+    const slot = this.slots[this.index];
+    this.cursor.x = slot.x; this.cursor.y = slot.y + 2;
+    this.paw.x = slot.x; this.paw.y = slot.y - 52 - Math.abs(Math.sin(time / 300)) * 3;
+    this.blurb.setText(CATS[slot.key].blurb);
+    this.t += delta / 1000;
+    this.stars.forEach((s, i) => {
+      const a = this.t * 0.9 + i * Math.PI * 2 / 3;
+      const delia = this.slots.find(x => x.key === 'delia');
+      s.x = delia.x + Math.cos(a) * 30;
+      s.y = delia.y - 24 + Math.sin(a) * 22;
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pause (spec §8): overlay with the cat's sit-loaf portrait.
+// ---------------------------------------------------------------------------
+class PauseScene extends Phaser.Scene {
+  constructor() { super('pause'); }
+  create() {
+    this.add.rectangle(0, 0, W, H, 0x1a1410, 0.6).setOrigin(0);
+    const panel = this.add.rectangle(W / 2, H / 2, 150, 96, 0x1a1410, 0.9).setStrokeStyle(1, 0xfff4dc, 0.8);
+    this.add.bitmapText(W / 2, H / 2 - 40, 'font', 'PAUSED').setOrigin(0.5).setScale(2).setTint(0xf2c94c);
+    this.add.image(W / 2 - 40, H / 2 + 8, GameState.cat + '-portrait').setOrigin(0.5);
+    const a = makeCatActor(this, GameState.cat, W / 2 + 26, H / 2 + 30);
+    a.sit();
+    this.add.bitmapText(W / 2 + 26, H / 2 - 16, 'font', CATS[GameState.cat].name).setOrigin(0.5).setTint(0xfff4dc);
+    this.add.bitmapText(W / 2, H / 2 + 38, 'font', 'ESC RESUME   T TITLE').setOrigin(0.5).setTint(0xd9c7a6);
+    const kb = this.input.keyboard;
+    this.kEsc = kb.addKey('ESC'); this.kT = kb.addKey('T'); this.kP = kb.addKey('P');
+    this.input.on('pointerdown', () => this.resume());
+  }
+  resume() {
+    this.scene.resume('play');
+    this.scene.stop();
+  }
+  update() {
+    const JD = Phaser.Input.Keyboard.JustDown;
+    if (JD(this.kEsc) || JD(this.kP)) this.resume();
+    if (JD(this.kT)) { this.scene.stop('play'); this.scene.start('title'); }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Play scene
 // ---------------------------------------------------------------------------
 class PlayScene extends Phaser.Scene {
   constructor() { super('play'); }
 
   create() {
-    Sprites.setTextureManager(this.textures);
-    Sprites.buildAll();
-    Sprites.installFont(this);
-    registerAnims(this, GameState.cat);
-
     // the scene object is reused on restart: clear everything from the last run
     this.cutscene = null;
     this.hud = null;
     this.touch = null;
+    this.dt = 0;
     this.muted = this.muted || false;
+    this.cameras.main.fadeIn(200, 0, 0, 0);
 
     // --- level ---------------------------------------------------------------
     const T = Sprites.TILE;
@@ -632,7 +948,7 @@ class PlayScene extends Phaser.Scene {
     this.mapOffsetY = worldH - mapH;
 
     this.physics.world.setBounds(0, 0, mapW, worldH);
-    this.physics.world.setBoundsCollision(true, true, true, false);   // fall out the bottom = pit
+    this.physics.world.setBoundsCollision(true, true, true, false);
     this.physics.world.TILE_BIAS = 12;
     this.cameras.main.setBounds(0, 0, mapW, worldH);
     this.cameras.main.setBackgroundColor('#e6d8bf');
@@ -657,7 +973,6 @@ class PlayScene extends Phaser.Scene {
     const ty = c => this.mapOffsetY + c.y * TILE + TILE / 2;
     const tbottom = c => this.mapOffsetY + (c.y + 1) * TILE;
 
-    // doorway + Glen & Em
     if (level.door) {
       const dx = Math.min(tx(level.door), mapW - 16);
       const dy = tbottom(level.door);
@@ -665,10 +980,9 @@ class PlayScene extends Phaser.Scene {
       this.doorway = this.add.image(dx, dy, 'doorway', 0).setOrigin(0.5, 1).setDepth(3);
       this.glen = this.add.sprite(dx - 7, dy, 'glen').setOrigin(0.5, 1).setDepth(4).play('glen-wave');
       this.em = this.add.sprite(dx + 7, dy, 'em').setOrigin(0.5, 1).setDepth(4).play('em-wave');
-      this.doorZone = new Phaser.Geom.Rectangle(dx - 26, dy - 64, 40, 64 + 24);   // reaches down to the floor in front of the step
+      this.doorZone = new Phaser.Geom.Rectangle(dx - 26, dy - 64, 40, 64 + 24);
     }
 
-    // kibble
     this.kibble = this.physics.add.group({ allowGravity: false, immovable: true });
     for (const k of level.kibble) {
       const s = this.kibble.create(tx(k), ty(k), 'kibble').setDepth(8);
@@ -677,20 +991,32 @@ class PlayScene extends Phaser.Scene {
       this.tweens.add({ targets: s, y: s.y - 2, duration: 600 + Math.random() * 200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
 
-    // enemies
+    // ghost mice (Delia only)
+    const catDef = CATS[GameState.cat];
+    this.seesMice = catDef.passives.includes('ghost');
+    this.miceTotal = level.ghostMice.length;
+    this.mice = this.physics.add.group({ allowGravity: false, immovable: true });
+    if (this.seesMice) {
+      const got = GameState.mice[level.id] || [];
+      level.ghostMice.forEach((m, i) => {
+        if (got.includes(i)) return;
+        const s = this.mice.create(tx(m), ty(m), 'ghost-mouse').setDepth(8).setAlpha(0.8);
+        s.index = i;
+        s.play({ key: 'ghost-mouse-idle', delay: i * 150 });
+        this.tweens.add({ targets: s, y: s.y - 3, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      });
+    }
+
     this.enemies = this.physics.add.group();
     for (const r of level.roombas) this.enemies.add(new Roomba(this, tx(r), tbottom(r)));
     this.physics.add.collider(this.enemies, this.layer);
 
-    // cucumbers (spawned by triggers)
     this.cucumbers = this.physics.add.group({ allowGravity: false, immovable: true });
     this.cucumberTriggers = level.cucumbers.map(c => ({ x: c.x * TILE, y: tbottom(c), fired: false }));
 
-    // items (tuna etc.)
     this.items = this.physics.add.group();
     this.physics.add.collider(this.items, this.layer);
 
-    // checkpoints (food bowls)
     this.bowls = level.checkpoints.map(c => {
       const s = this.add.image(tx(c), tbottom(c), 'bowl', 0).setOrigin(0.5, 1).setDepth(7);
       return { sprite: s, x: tx(c), y: tbottom(c), done: false };
@@ -706,6 +1032,7 @@ class PlayScene extends Phaser.Scene {
     this.player = new Player(this, start.x, start.y, GameState.cat);
     this.physics.add.collider(this.player.box, this.layer);
     this.physics.add.overlap(this.player.box, this.kibble, (box, k) => this.collectKibble(k));
+    this.physics.add.overlap(this.player.box, this.mice, (box, m) => this.collectMouse(m));
     this.physics.add.overlap(this.player.box, this.enemies, (box, e) => this.onEnemyContact(e));
     this.physics.add.overlap(this.player.box, this.cucumbers, (box, c) => this.onCucumber(c));
     this.physics.add.overlap(this.player.box, this.items, (box, it) => this.onItem(it));
@@ -723,20 +1050,25 @@ class PlayScene extends Phaser.Scene {
     this.keyDebugText = kb.addKey('BACKTICK');
     this.keyDebugBodies = kb.addKey('F2');
     this.keyMute = kb.addKey('M');
+    this.keyPause = kb.addKey('ESC');
+    this.keyPause2 = kb.addKey('P');
     kb.on('keydown', () => { Sfx.unlock(); if (this.touch) this.touch.setVisible(false); });
     this.input.on('pointerdown', () => { Sfx.unlock(); });
     if (this.sys.game.device.input.touch) this.touch = new TouchControls(this);
 
     // --- HUD / debug ---------------------------------------------------------------
-    this.hud = new Hud(this);
+    this.hud = new Hud(this, this.seesMice);
     this.debugOn = false;
     this.debugText = this.add.text(2, 20, '', {
       fontFamily: 'monospace', fontSize: '8px', color: '#ffffff',
       backgroundColor: '#00000088', padding: { x: 2, y: 1 },
     }).setScrollFactor(0).setDepth(1001).setVisible(false);
+
+    // level banner
+    const banner = this.add.bitmapText(W / 2, 60, 'font', 'LEVEL ' + level.id).setOrigin(0.5).setScale(2).setScrollFactor(0).setDepth(1500).setTint(0x3a2414);
+    this.tweens.add({ targets: banner, alpha: 0, delay: 1200, duration: 400, onComplete: () => banner.destroy() });
   }
 
-  /** Apartment wall: flat colour, faint wallpaper stripes, a baseboard. */
   drawBackdrop(mapW, worldH) {
     const g = this.add.graphics().setDepth(0);
     g.fillStyle(0xd9c7a6, 1);
@@ -746,7 +1078,6 @@ class PlayScene extends Phaser.Scene {
     g.fillRect(0, floorY - 6, mapW, 6);
     g.fillStyle(0x8c6d48, 1);
     g.fillRect(0, floorY - 1, mapW, 1);
-    // window with a tree outside (world 1 backdrop, static for now)
     for (let x = 96; x < mapW; x += 480) {
       g.fillStyle(0xf4f1e8, 1); g.fillRect(x, 24, 56, 44);
       g.fillStyle(0x9fc8e8, 1); g.fillRect(x + 3, 27, 50, 38);
@@ -762,7 +1093,6 @@ class PlayScene extends Phaser.Scene {
   curtainAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.CURTAIN); }
 
   floorBelow(wx, wy) {
-    // world y of the first solid tile top at/below wy
     for (let y = wy; y < this.worldH; y += TILE) {
       const t = this.tileAt(wx, y);
       if (t && t.collides) return this.mapOffsetY + t.y * TILE;
@@ -796,6 +1126,15 @@ class PlayScene extends Phaser.Scene {
     this.popText(k.x, k.y - 6, '+1');
   }
 
+  collectMouse(m) {
+    m.disableBody(true, true);
+    const list = GameState.mice[this.level.id] || (GameState.mice[this.level.id] = []);
+    if (!list.includes(m.index)) list.push(m.index);
+    Sfx.mouse();
+    this.hud.refresh();
+    this.popText(m.x, m.y - 8, '*', 0xffffff);
+  }
+
   bonkBlock(tile) {
     const T = this.T;
     const wx = tile.x * TILE, wy = this.mapOffsetY + tile.y * TILE;
@@ -825,7 +1164,6 @@ class PlayScene extends Phaser.Scene {
         bump(T.BRICK, () => this.layer.putTileAt(T.BRICK, tile.x, tile.y));
       }
     }
-    // any enemy standing on the block gets knocked
     const above = this.enemies.getChildren().filter(e => e.alive && Math.abs(e.x - (wx + 8)) < 14 && Math.abs(e.body.bottom - wy) < 3);
     for (const e of above) { e.stomp(); Sfx.stomp(); }
   }
@@ -834,8 +1172,7 @@ class PlayScene extends Phaser.Scene {
     if (it.rising) return;
     if (it.kind === 'tuna') {
       if (!this.player.super) this.player.setSuper(true);
-      else this.popText(it.x, it.y - 8, '+10');
-      GameState.kibble = Math.min(999, GameState.kibble + (this.player.super ? 0 : 0));
+      else this.popText(it.x, it.y - 8, 'YUM');
       this.hud.refresh();
       Sfx.powerup();
     }
@@ -855,6 +1192,8 @@ class PlayScene extends Phaser.Scene {
       this.player.squash(this.player.baseScale * 1.2, this.player.baseScale * 0.8, 120);
       Sfx.stomp();
       this.popText(e.x, e.y - 14, 'BONK', 0x3a3a48);
+    } else if (this.player.shadow) {
+      // Scottie's Shadow: enemies don't see her while she holds still
     } else {
       this.hurt(e.x);
     }
@@ -871,7 +1210,6 @@ class PlayScene extends Phaser.Scene {
 
   spawnCucumber(trig) {
     const px = this.player.box.x;
-    // two tiles behind the cat, but never over a pit
     let x = px - 40, y = this.worldH;
     for (const off of [40, 32, 24, 16]) {
       const fx = px - off, fy = this.floorBelow(fx, this.player.box.y);
@@ -904,9 +1242,10 @@ class PlayScene extends Phaser.Scene {
     if (p.dead) return;
     p.dead = true;
     p.stopClimb();
+    p.setShadow(false);
     p.body.enable = false;
     p.sprite.anims.stop();
-    p.sprite.setFrame(p.F.fall1);
+    p.sprite.setFrame(p.F.hurt);
     p.tail.setVisible(false);
     p.sprite.setAlpha(1);
     this.cameras.main.stopFollow();
@@ -920,11 +1259,20 @@ class PlayScene extends Phaser.Scene {
       GameState.lives -= 1;
       GameState.super = false;
       if (GameState.lives <= 0) {
-        GameState.lives = 9;
-        GameState.kibble = 0;
-        GameState.checkpoint = null;
+        this.gameOver();
+      } else {
+        this.scene.restart();
       }
-      this.scene.restart();
+    });
+  }
+
+  gameOver() {
+    this.add.rectangle(0, 0, W, H, 0x1a1410, 0.8).setOrigin(0).setScrollFactor(0).setDepth(3000);
+    this.add.bitmapText(W / 2, H / 2 - 10, 'font', 'OUT OF LIVES').setOrigin(0.5).setScale(2).setScrollFactor(0).setDepth(3001).setTint(0xf2c94c);
+    this.add.bitmapText(W / 2, H / 2 + 14, 'font', 'ALL NINE. IMPRESSIVE.').setOrigin(0.5).setScrollFactor(0).setDepth(3001).setTint(0xfff4dc);
+    this.time.delayedCall(2500, () => {
+      GameState.lives = 9; GameState.kibble = 0; GameState.checkpoint = null;
+      this.scene.start('title');
     });
   }
 
@@ -936,12 +1284,20 @@ class PlayScene extends Phaser.Scene {
     this.popText(bw.x, bw.y - 20, 'YUM', 0xc85a5a);
   }
 
+  togglePause() {
+    if (this.cutscene || this.player.dead) return;
+    Sfx.pause();
+    this.scene.pause();
+    this.scene.launch('pause');
+  }
+
   // --- door ending (spec §6) ------------------------------------------------------
   startEnding() {
     const p = this.player;
     this.cutscene = { step: 'walk', t: 0 };
     p.locked = true;
     p.speedScale = 0.5;
+    p.setShadow(false);
     p.autoInput = () => ({ ...NO_INPUT, right: true, jump: true, jumpPressed: p.grounded && p.body.blocked.right });
     Sfx.door();
     if (this.touch) this.touch.setVisible(false);
@@ -954,7 +1310,7 @@ class PlayScene extends Phaser.Scene {
       case 'walk':
         if (p.box.x >= this.doorX - 4 || cs.t > 6) {
           cs.step = 'rub'; cs.t = 0;
-          p.autoInput = () => NO_INPUT;      // body stays put; the rub is visual
+          p.autoInput = () => NO_INPUT;
           p.forceAnim = 'walk';
         }
         break;
@@ -997,7 +1353,10 @@ class PlayScene extends Phaser.Scene {
         if (cs.t >= 3.5) {
           cs.step = 'done';
           GameState.checkpoint = null;
-          this.scene.restart();
+          const ids = Levels.all();
+          const next = ids[ids.indexOf(this.level.id) + 1];
+          if (next) { GameState.level = next; this.scene.restart(); }
+          else { this.scene.start('title'); }
         }
         break;
     }
@@ -1005,15 +1364,16 @@ class PlayScene extends Phaser.Scene {
 
   showTally() {
     const cam = this.cameras.main;
-    const panel = this.add.rectangle(W / 2, H / 2, 150, 70, 0x1a1410, 0.85).setScrollFactor(0).setDepth(3000);
-    panel.setStrokeStyle(1, 0xfff4dc, 0.8);
     const lines = [
       'LEVEL ' + this.level.id + ' CLEAR!',
       'KIBBLE ' + String(GameState.kibble).padStart(3, '0'),
       'LIVES x' + GameState.lives,
     ];
+    if (this.seesMice) lines.push('GHOST MICE ' + (GameState.mice[this.level.id] || []).length + '/' + this.miceTotal);
+    const panel = this.add.rectangle(W / 2, H / 2, 160, 24 + lines.length * 16, 0x1a1410, 0.85).setScrollFactor(0).setDepth(3000);
+    panel.setStrokeStyle(1, 0xfff4dc, 0.8);
     lines.forEach((s, i) => {
-      this.add.bitmapText(W / 2, H / 2 - 22 + i * 16, 'font', s).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setTint(i === 0 ? 0xf2c94c : 0xfff4dc);
+      this.add.bitmapText(W / 2, H / 2 - (lines.length - 1) * 8 + i * 16, 'font', s).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setTint(i === 0 ? 0xf2c94c : 0xfff4dc);
     });
     cam.flash(300, 255, 244, 220);
   }
@@ -1045,6 +1405,7 @@ class PlayScene extends Phaser.Scene {
 
   update(time, delta) {
     const dt = Math.min(delta, 50) / 1000;
+    this.dt = dt;
     const inp = this.readInput();
     const JustDown = Phaser.Input.Keyboard.JustDown;
 
@@ -1052,13 +1413,11 @@ class PlayScene extends Phaser.Scene {
     if (JustDown(this.keyDebugText)) { this.debugOn = !this.debugOn; this.debugText.setVisible(this.debugOn); }
     if (JustDown(this.keyDebugBodies)) this.toggleBodyDebug();
     if (JustDown(this.keyMute)) { this.muted = !this.muted; Sfx.setMuted(this.muted); }
+    if (JustDown(this.keyPause) || JustDown(this.keyPause2)) { this.togglePause(); return; }
 
     const p = this.player;
     const b = p.body;
 
-    // Head bonk: blocked.up comes from the physics step just run, and lastVy
-    // is the velocity the player set before it. Check before p.update
-    // overwrites lastVy.
     if (!p.dead && !this.cutscene && b.blocked.up && p.lastVy < 0) {
       const t = this.tileAt(b.x + b.halfWidth, b.y - 2);
       if (t && (t.index === this.T.PAW || t.index === this.T.BRICK)) this.bonkBlock(t);
@@ -1072,33 +1431,28 @@ class PlayScene extends Phaser.Scene {
     const cx = b.x + b.halfWidth;
     const feet = b.y + b.height;
 
-    // pit
     if (b.y > this.worldH + 8) { this.die(); return; }
 
-    // thumbtacks: the pins live in the lower 8px of the tile
     for (const x of [b.x + 3, b.x + b.width - 3]) {
       const t = this.tileAt(x, feet - 1);
       if (t && t.index === this.T.TACKS && feet > this.mapOffsetY + t.y * TILE + 8) { this.hurt(cx + (x < cx ? 8 : -8)); break; }
     }
 
-    // cucumber triggers (fire when the cat walks past, rightwards)
     for (const trig of this.cucumberTriggers) {
       if (!trig.fired && cx > trig.x + 8 && p.grounded) { trig.fired = true; this.spawnCucumber(trig); }
     }
     for (const c of this.cucumbers.getChildren()) if (c.cooldown > 0) c.cooldown -= dt;
 
-    // checkpoints
     for (const bw of this.bowls) {
       if (!bw.done && Math.abs(cx - bw.x) < 12 && Math.abs(feet - bw.y) < 20) this.reachCheckpoint(bw);
     }
 
-    // door
     if (this.doorZone && p.grounded && Phaser.Geom.Rectangle.Contains(this.doorZone, cx, feet - 1)) this.startEnding();
 
     if (this.debugOn) {
       const ms = s => String(Math.round(s * 1000)).padStart(3) + 'ms';
       this.debugText.setText([
-        `${p.state.padEnd(8)} vx ${String(Math.round(b.velocity.x)).padStart(4)}  vy ${String(Math.round(b.velocity.y)).padStart(4)}  ${p.grounded ? 'GROUND' : 'AIR'}${p.super ? ' SUPER' : ''}`,
+        `${p.state.padEnd(8)} vx ${String(Math.round(b.velocity.x)).padStart(4)}  vy ${String(Math.round(b.velocity.y)).padStart(4)}  ${p.grounded ? 'GROUND' : 'AIR'}${p.super ? ' SUPER' : ''}${p.shadow ? ' SHADOW' : ''}${p.floating ? ' FLOAT' : ''}`,
         `coyote ${ms(p.coyote)}  buffer ${ms(p.buffer)}  dash cd ${p.dashCooldown.toFixed(2)}`,
         `last jump: ${p.jumpFlash > 0 ? '>> ' + p.jumpSource + ' <<' : p.jumpSource}   fps ${Math.round(this.game.loop.actualFps)}`,
         `x ${Math.round(b.x)} y ${Math.round(b.y)}  tile ${Math.floor(cx / TILE)},${Math.floor((feet - 1 - this.mapOffsetY) / TILE)}`,
@@ -1133,7 +1487,7 @@ const game = new Phaser.Game({
     default: 'arcade',
     arcade: { gravity: { y: PHYS.gravity }, fps: 60, fixedStep: true, debug: false },
   },
-  scene: [PlayScene],
+  scene: [BootScene, TitleScene, SelectScene, PlayScene, PauseScene],
 });
 
 window.addEventListener('resize', () => {
