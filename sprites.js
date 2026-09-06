@@ -453,14 +453,226 @@ const Sprites = (() => {
     sit: deliaSit,
   };
 
+  // --- The rest of the roster (spec §1.3): original designs, <= 6 visible colours each.
+  // Shared palette slots: 0 outline, 1 base, 2 light/second, 3 marking, 4 inner ear,
+  // 5 eye, 6 pupil, 7 nose, 8 collar.
+  function blinkOf(head, eyeChars = '56') {
+    return head.map((r, i) => {
+      if (i !== 6 && i !== 7) return r;
+      return r.split('').map(ch => (eyeChars.includes(ch) ? (i === 6 ? '0' : '1') : ch)).join('');
+    });
+  }
+  function earsBackOf(head) {
+    return ['.'.repeat(head[0].length), head[2], head[3]].concat(head.slice(4)).slice(0, head.length);
+  }
+  // Generic signature pose: sitting upright facing forward, tail curled round the paws.
+  function sitUpright(def, blink) {
+    const head = blink ? def.headBlink : def.head;
+    const tailCurl = ['0000000.....', '3333330.....', '4444440.....', '.000000.....'];
+    const tail = recolor(tailCurl, def.tailMap || {});
+    const L = [
+      { art: oval(12, 13, 0), x: 10, y: 9, union: true },
+    ];
+    if (def.decorateSit) L.push(...def.decorateSit());
+    L.push(
+      { art: def.legShort || LEG_SHORT, x: 12, y: 17, union: true },
+      { art: def.legShort || LEG_SHORT, x: 16, y: 17, union: true },
+      { art: tail, x: 4, y: 20, union: true },
+      { art: head, x: 12, y: 1, union: true },
+      { art: def.collar, x: 12, y: 11 },
+    );
+    return compose(FRAME_W, FRAME_H, L);
+  }
+  function bars(xs, y, h, ch) {
+    return xs.map(x => ({ art: Array(h).fill(ch), x, y }));
+  }
+
+  // Marmalade — chunky orange tabby, stripes, white chin. Blue collar.
+  const MARM_PAL = ['#4a2a10', '#e8923a', '#f4f2ee', '#b8641e', '#f0b890', '#7fbf5f', '#1a1a1a', '#e88a8a', '#4f8fe8'];
+  const MARM_HEAD = [
+    '.00.....00...',
+    '.040...0440..',
+    '.0440.04440..',
+    '.04410044410.',
+    '0113113113110',
+    '0111311311110',
+    '0111111561110',
+    '0111111561110',
+    '0111111122270',
+    '.011111222220',
+    '.002111122200',
+    '...00000000..',
+  ];
+  const MARMALADE = {
+    palette: MARM_PAL,
+    head: MARM_HEAD, headBlink: blinkOf(MARM_HEAD), headEarsBack: earsBackOf(MARM_HEAD),
+    body: oval(20, 11, 0), bodyLong: oval(22, 10, 0), bodySquat: oval(20, 9, 0), bodyPuff: oval(21, 13, 0),
+    bodyX: 3, bodyY: 7,
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 2: '3' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 2: '3' })), tailAir: TAIL_UP.map(t => recolor(t, { 2: '3' })),
+    decorate: ({ bodyY }) => bars([7, 10, 13, 16], bodyY + 1, 3, '3'),
+    decorateSit: () => bars([13, 16, 19], 11, 3, '3'),
+    sit: sitUpright,
+  };
+
+  // Mochi — cream seal-point Siamese, blue eyes. Red collar.
+  const MOCHI_PAL = ['#3a2a24', '#f2e6d0', '#d8c8b0', '#4a2f22', '#6a4a3a', '#4f8fe8', '#10101a', '#6a4a3a', '#c0304a'];
+  const MOCHI_HEAD = [
+    '.00.....00...',
+    '.030...0330..',
+    '.0330.03330..',
+    '.03310033310.',
+    '0111111111110',
+    '0111111113310',
+    '0111111563310',
+    '0111111563310',
+    '0111111333370',
+    '.011111133330',
+    '.002111133300',
+    '...00000000..',
+  ];
+  const MOCHI_LEG = LEG.map((r, i) => (i >= 6 ? recolor([r], { 1: '3' })[0] : r));
+  const MOCHI_LEG_S = LEG_SHORT.map((r, i) => (i >= 3 ? recolor([r], { 1: '3' })[0] : r));
+  const MOCHI_LEG_T = LEG_TUCK.map((r, i) => (i >= 2 ? recolor([r], { 1: '3' })[0] : r));
+  const MOCHI = {
+    palette: MOCHI_PAL,
+    head: MOCHI_HEAD, headBlink: blinkOf(MOCHI_HEAD), headEarsBack: earsBackOf(MOCHI_HEAD),
+    body: oval(18, 10, 0), bodyLong: oval(20, 9, 0), bodySquat: oval(18, 8, 0), bodyPuff: oval(19, 12, 0),
+    leg: MOCHI_LEG, legShort: MOCHI_LEG_S, legTuck: MOCHI_LEG_T,
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 1: '3', 2: '4', 3: '3', 4: '4' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 1: '3', 2: '4' })), tailAir: TAIL_UP.map(t => recolor(t, { 1: '3', 2: '4' })),
+    sit: sitUpright,
+  };
+
+  // Pickle — hairless sphynx, pink-beige, wrinkles, huge ears. Black collar.
+  const PICKLE_PAL = ['#7a4a3a', '#e8b8a0', '#f4d0bc', '#c08878', '#f0c8c0', '#b8d860', '#202020', '#c07878', '#2a2a2a'];
+  const PICKLE_HEAD = [
+    '.00.....000..',
+    '.040...04440.',
+    '.0440..04440.',
+    '.04410044410.',
+    '0122333322110',
+    '0111333311110',
+    '0111111561110',
+    '0111111561110',
+    '0113111111170',
+    '.013111111110',
+    '.002111111200',
+    '...00000000..',
+  ];
+  const PICKLE = {
+    palette: PICKLE_PAL,
+    head: PICKLE_HEAD, headBlink: blinkOf(PICKLE_HEAD), headEarsBack: earsBackOf(PICKLE_HEAD),
+    body: oval(17, 9, 1), bodyLong: oval(19, 8, 1), bodySquat: oval(17, 7, 1), bodyPuff: oval(18, 11, 1),
+    bodyY: 9,
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 2: '3' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 2: '3' })), tailAir: TAIL_UP.map(t => recolor(t, { 2: '3' })),
+    decorate: ({ bodyY }) => [{ art: ['333', '.33'], x: 15, y: bodyY + 2 }],
+    sit: sitUpright,
+  };
+
+  // Biscuit — calico: white with orange and black patches. Green collar.
+  const BISCUIT_PAL = ['#3a3030', '#f4f2ee', '#d9d6d0', '#e8923a', '#2a2a30', '#d8a840', '#101010', '#e3a0b0', '#6fbf6f'];
+  const BISCUIT_HEAD = [
+    '.00.....00...',
+    '.040...0330..',
+    '.0440.03330..',
+    '.04410033310.',
+    '0114411333310',
+    '0111111333310',
+    '0111111563110',
+    '0111111561110',
+    '0111111111170',
+    '.011111111110',
+    '.002111111200',
+    '...00000000..',
+  ];
+  const BISCUIT = {
+    palette: BISCUIT_PAL,
+    head: BISCUIT_HEAD, headBlink: blinkOf(BISCUIT_HEAD), headEarsBack: earsBackOf(BISCUIT_HEAD),
+    body: oval(18, 10, 0), bodyLong: oval(20, 9, 0), bodySquat: oval(18, 8, 0), bodyPuff: oval(19, 12, 0),
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 1: '3', 2: '3' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 1: '3', 2: '3' }).map((r, i) => (i < 4 ? recolor([r], { 3: '4' })[0] : r))),
+    tailAir: TAIL_UP.map(t => recolor(t, { 1: '3', 2: '3' }).map((r, i) => (i < 4 ? recolor([r], { 3: '4' })[0] : r))),
+    decorate: ({ bodyY }) => [{ art: blob(8, 5, '3'), x: 11, y: bodyY + 1 }, { art: blob(6, 4, '4'), x: 5, y: bodyY + 2 }],
+    decorateSit: () => [{ art: blob(7, 5, '3'), x: 12, y: 11 }],
+    sit: sitUpright,
+  };
+
+  // Deli — bodega tabby: gray mackerel stripes, notched ear. Yellow collar.
+  const DELI_PAL = ['#2a2a30', '#8a8a92', '#a8a8b0', '#4a4a55', '#c8a0a0', '#c8d040', '#101010', '#c07878', '#e8c14a'];
+  const DELI_HEAD = [
+    '.00.....0.0..',
+    '.040...04.40.',
+    '.0440.044440.',
+    '.04410044410.',
+    '0131313131310',
+    '0111311311110',
+    '0111111561110',
+    '0111111561110',
+    '0113111111170',
+    '.011111111110',
+    '.002211112200',
+    '...00000000..',
+  ];
+  const DELI = {
+    palette: DELI_PAL,
+    head: DELI_HEAD, headBlink: blinkOf(DELI_HEAD), headEarsBack: earsBackOf(DELI_HEAD),
+    body: oval(18, 10, 0), bodyLong: oval(20, 9, 0), bodySquat: oval(18, 8, 0), bodyPuff: oval(19, 12, 0),
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 2: '3' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 2: '3' })), tailAir: TAIL_UP.map(t => recolor(t, { 2: '3' })),
+    decorate: ({ bodyY }) => bars([6, 8, 10, 12, 14, 16], bodyY + 1, 4, '3').map((b, i) => ({ ...b, y: b.y + (i % 2) })),
+    decorateSit: () => bars([13, 15, 17, 19], 11, 3, '3'),
+    sit: sitUpright,
+  };
+
+  // Clover — gray Scottish Fold: folded ears, round face, copper eyes. Pink collar.
+  const CLOVER_PAL = ['#3a3a48', '#8c96a8', '#b0b8c8', '#6a7488', '#c8a8b0', '#d8883a', '#101010', '#c88898', '#e88ab0'];
+  const CLOVER_HEAD = [
+    '.............',
+    '.............',
+    '.00......00..',
+    '0440....0440.',
+    '0111111111110',
+    '0122111122110',
+    '0111115651110',
+    '0111115651110',
+    '0111111111170',
+    '0111111111110',
+    '.001111111100',
+    '..000000000..',
+  ];
+  const CLOVER = {
+    palette: CLOVER_PAL,
+    head: CLOVER_HEAD, headBlink: blinkOf(CLOVER_HEAD), headEarsBack: CLOVER_HEAD,
+    body: oval(18, 11, 1), bodyLong: oval(20, 10, 1), bodySquat: oval(18, 9, 1), bodyPuff: oval(19, 13, 1),
+    bodyY: 7,
+    collar: ['.8888', '88888', '.8888'], collarDy: 10,
+    tailMap: { 2: '3' },
+    tail: TAIL_SWAY.map(t => recolor(t, { 2: '3' })), tailAir: TAIL_UP.map(t => recolor(t, { 2: '3' })),
+    sit: sitUpright,
+  };
+
+  const ROSTER = { scottie: SCOTTIE, delia: DELIA, marmalade: MARMALADE, mochi: MOCHI, pickle: PICKLE, biscuit: BISCUIT, deli: DELI, clover: CLOVER };
+
   function buildScottie() { return buildCat('scottie', SCOTTIE); }
   function buildDelia() { return buildCat('delia', DELIA); }
+  function buildRoster() {
+    const out = {};
+    for (const key of Object.keys(ROSTER)) out[key] = buildCat(key, ROSTER[key]);
+    return out;
+  }
 
 
   // ------------------------------------------------------------------------
   // World 1 tileset (16x16). Index order matters: see TILE below.
   // ------------------------------------------------------------------------
-  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7 };
+  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7, KITCHEN: 8, COUCH_L: 9, COUCH_M: 10, COUCH_R: 11, RUG: 12 };
 
   const TILE_PAL = [
     '#4a2f1a', // 0 dark seam
@@ -483,6 +695,14 @@ const Sprites = (() => {
     '#6d8fd1', // h curtain light
     '#8a8070', // i used block
     '#b0a898', // j used block light
+    '#eeeae0', // k kitchen tile light
+    '#9a9aa4', // l kitchen tile dark
+    '#c8c4bc', // m grout
+    '#c04040', // n couch
+    '#e05050', // o couch light
+    '#7a2020', // p couch dark
+    '#b03030', // q rug
+    '#e8d0a0', // r rug border
   ];
 
   const T_FLOOR_TOP = [
@@ -630,8 +850,24 @@ const Sprites = (() => {
     '....fghgfghg....',
   ];
 
+  const T_KITCHEN = [
+    'kkkkkkkmlllllllm', 'kkkkkkkmlllllllm', 'kkkkkkkmlllllllm', 'kkkkkkkmlllllllm',
+    'kkkkkkkmlllllllm', 'kkkkkkkmlllllllm', 'kkkkkkkmlllllllm', 'mmmmmmmmmmmmmmmm',
+    'lllllllmkkkkkkkm', 'lllllllmkkkkkkkm', 'lllllllmkkkkkkkm', 'lllllllmkkkkkkkm',
+    'lllllllmkkkkkkkm', 'lllllllmkkkkkkkm', 'lllllllmkkkkkkkm', 'mmmmmmmmmmmmmmmm',
+  ];
+  const T_COUCH_M = [
+    'pppppppppppppppp', 'poooooooooooooop', 'pnnnnnnnnnnnnnnp', 'pnnnnnnnnnnnnnnp',
+    'pnnnnnnnnnnnnnnp', 'pppppppppppppppp', 'pnnnnnnnnnnnnnnp', 'pnnnnnnnnnnnnnnp',
+    'pnnnnnnnnnnnnnnp', 'pnnnnnnnnnnnnnnp', 'pnnnnnnnnnnnnnnp', 'pnnnnnnnnnnnnnnp',
+    'pnnnnnnnnnnnnnnp', 'pppppppppppppppp', '.pp..........pp.', '.pp..........pp.',
+  ];
+  const T_COUCH_L = T_COUCH_M.map((r, i) => (i >= 1 && i <= 12 ? 'pooo' + r.slice(4) : r));
+  const T_COUCH_R = T_COUCH_M.map((r, i) => (i >= 1 && i <= 12 ? r.slice(0, 12) + 'ooop' : r));
+  const T_RUG = ['qqqqqqqqqqqqqqqq', 'qrrrrrrrrrrrrrrq', 'qrqqqqqqqqqqqqrq', 'qrrrrrrrrrrrrrrq', 'qqqqqqqqqqqqqqqq'].concat(T_FLOOR_TOP.slice(5));
+
   function buildTiles() {
-    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED], TILE_PAL);
+    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG], TILE_PAL);
   }
 
   // ------------------------------------------------------------------------
@@ -680,6 +916,27 @@ const Sprites = (() => {
       '4444444444444444',
     ];
     makeSprite('door', [DOOR], ['#3a2414', '#7a4a24', '#a3683a', '#e8c14a', '#c9c1b0']);
+
+
+    // Floor lamp 16x32 (decor)
+    const LAMP = [
+      '....00000000....', '...0333333330...', '..033333333330..', '..033333333330..', '.03333333333330.', '.03333333333330.',
+      '0000000000000000', '.......22.......',
+    ].concat(Array(21).fill('.......11.......')).concat(['....00000000....', '...0111111110...', '....00000000....']);
+    makeSprite('lamp', [LAMP], ['#3a2a1a', '#6a6a70', '#fff0a0', '#f2c94c']);
+
+    // Catnip sprig 10x10
+    makeSprite('catnip', [[
+      '....00....', '...0110...', '..011210..', '.01112110.', '.01121110.', '.01121110.', '..011210..', '...0110...', '....00....', '....0.....',
+    ]], ['#1f4d1f', '#4fa04f', '#a8e070']);
+    // Bell collar 8x10
+    makeSprite('bell', [[
+      '...00...', '..0110..', '..0110..', '.011110.', '.011110.', '.011110.', '01111110', '00000000', '...00...', '...00...',
+    ]], ['#7a5a10', '#f2c94c', '#ffe08a']);
+    // Fish 12x8
+    makeSprite('fish', [[
+      '........0...', '..00000.00..', '.0111110110.', '01121111110.', '01111111110.', '.0111110110.', '..00000.00..', '........0...',
+    ]], ['#1a3a6a', '#4f8fe8', '#ffffff']);
 
     // Dust puff 8x8, 4 frames
     makeSprite('dust', [
@@ -1031,8 +1288,7 @@ const Sprites = (() => {
     buildFont();
     buildEnemies();
     buildHumans();
-    FRAMES.scottie = buildScottie();
-    FRAMES.delia = buildDelia();
+    Object.assign(FRAMES, buildRoster());
   }
 
   return {

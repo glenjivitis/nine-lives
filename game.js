@@ -1,7 +1,6 @@
 // game.js — Nine Lives
-// Phase 3: title, character select (Scottie + Delia), pause, cat passives
-// (Shadow + double jump, Float + ghost mice) on top of the complete level
-// 1-1 from phase 2. All feel tunables live under PHYS.
+// Phase 4: full roster of eight cats with passives, powerups (tuna, catnip,
+// bell collar, fish), levels 1-1..1-4. All feel tunables live under PHYS.
 
 const W = 320;
 const H = 180;
@@ -39,6 +38,14 @@ const PHYS = {
   climbSpeed: 60,
   roombaSpeed: 40,
   itemSpeed: 45,
+  catnipTime: 8,
+  catnipSpeed: 1.4,
+  catnipJump: 1.2,
+  bellRange: 48,
+  yowlStun: 1.5,
+  yowlCooldown: 8,
+  slideBoost: 1.5,
+  rollHeight: 10,
 };
 
 const HITBOX = { w: 20, h: 18 };
@@ -54,6 +61,7 @@ const GameState = {
   checkpoint: null,   // { level, x, y }
   super: false,
   mice: {},           // level id -> [collected indices]
+  bell: false,        // bell collar lasts the rest of the level
 };
 
 function resetRun(catKey) {
@@ -64,6 +72,7 @@ function resetRun(catKey) {
   GameState.checkpoint = null;
   GameState.super = false;
   GameState.mice = {};
+  GameState.bell = false;
 }
 
 function approach(value, target, step) {
@@ -135,6 +144,10 @@ const Sfx = (() => {
     chime()  { [784, 988, 1175, 1568].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.35, vol: 0.08, delay: i * 0.1 })); },
     select() { tone({ f0: 500, f1: 700, dur: 0.05, vol: 0.06 }); },
     pause()  { tone({ f0: 600, f1: 300, dur: 0.12, vol: 0.08 }); },
+    yowl()   { tone({ type: 'sawtooth', f0: 900, f1: 280, dur: 0.55, vol: 0.16 }); tone({ type: 'square', f0: 1200, f1: 400, dur: 0.4, vol: 0.06, delay: 0.05 }); },
+    catnip() { [523, 659, 784, 659, 880, 1046].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.1, vol: 0.08, delay: i * 0.06 })); },
+    bell()   { [1568, 2093].forEach((f, i) => tone({ type: 'triangle', f0: f, f1: f * 0.98, dur: 0.3, vol: 0.07, delay: i * 0.12 })); },
+    crack()  { noise(0.12, 0.14, 900); tone({ f0: 180, f1: 90, dur: 0.12, vol: 0.10 }); },
   };
 })();
 
@@ -142,10 +155,26 @@ const Sfx = (() => {
 // Cat definitions (spec §1). Passives: shadow, double, float, ghost.
 // ---------------------------------------------------------------------------
 const CATS = {
-  scottie: { name: 'SCOTTIE', texture: 'scottie', passives: ['shadow', 'double'], sound: 'meow', blurb: 'SHADOW: STAND STILL TO VANISH' },
-  delia:   { name: 'DELIA', texture: 'delia', passives: ['float', 'ghost'], sound: 'chime', blurb: 'FLOAT: HOLD JUMP. SEES GHOST MICE' },
+  scottie:   { name: 'SCOTTIE', texture: 'scottie', passives: ['shadow', 'double'], sound: 'meow', blurb: 'SHADOW: STAND STILL TO VANISH' },
+  delia:     { name: 'DELIA', texture: 'delia', passives: ['float', 'ghost'], sound: 'chime', blurb: 'FLOAT: HOLD JUMP. SEES GHOST MICE' },
+  marmalade: { name: 'MARMALADE', texture: 'marmalade', passives: ['bonk'], sound: 'meow', blurb: 'BONK: DASH THROUGH BRICKS' },
+  mochi:     { name: 'MOCHI', texture: 'mochi', passives: ['yowl'], sound: 'meow', blurb: 'YOWL: ACTION STUNS EVERYONE' },
+  pickle:    { name: 'PICKLE', texture: 'pickle', passives: ['slide'], sound: 'meow', blurb: 'SLIDE: FAST ON KITCHEN TILES' },
+  biscuit:   { name: 'BISCUIT', texture: 'biscuit', passives: ['chaos'], sound: 'meow', blurb: 'CHAOS: A NEW PASSIVE EVERY LEVEL' },
+  deli:      { name: 'DELI', texture: 'deli', passives: ['stocked'], sound: 'meow', blurb: 'STOCKED: STARTS WITH A POWERUP' },
+  clover:    { name: 'CLOVER', texture: 'clover', passives: ['roll'], sound: 'meow', blurb: 'ROLL: CROUCH UNDER TIGHT GAPS' },
 };
-const CAT_ORDER = ['scottie', 'delia'];
+const CAT_ORDER = ['scottie', 'delia', 'marmalade', 'mochi', 'pickle', 'biscuit', 'deli', 'clover'];
+const PASSIVE_POOL = ['shadow', 'double', 'float', 'ghost', 'bonk', 'yowl', 'slide', 'stocked', 'roll'];
+const POWERUPS = ['tuna', 'catnip', 'bell', 'fish'];
+
+/** Passives for this level (Biscuit rolls a random one each level). */
+function resolvePassives(catKey) {
+  const base = CATS[catKey].passives;
+  if (!base.includes('chaos')) return base.slice();
+  const pick = PASSIVE_POOL[Math.floor(Math.random() * PASSIVE_POOL.length)];
+  return [pick];
+}
 
 function registerAnims(scene) {
   for (const key of Object.keys(CATS)) {
@@ -196,6 +225,7 @@ class Player {
   constructor(scene, x, groundY, catKey) {
     this.scene = scene;
     this.cat = CATS[catKey];
+    this.passives = scene.passives || this.cat.passives;
     this.F = Sprites.FRAMES[this.cat.texture];
     this.spawn = { x, y: groundY - HITBOX.h / 2 };
 
@@ -249,10 +279,29 @@ class Player {
     this.floating = false;
     this.stillTime = 0;
     this.shadow = false;
+    this.rolling = false;
+    this.catnip = 0;
+    this.trailTimer = 0;
+    this.yowlCooldown = 0;
+    this.bell = !!GameState.bell;
     this.setSuper(GameState.super, true);
   }
 
-  has(passive) { return this.cat.passives.includes(passive); }
+  has(passive) { return this.passives.includes(passive); }
+
+  setRolling(on) {
+    if (on === this.rolling) return;
+    this.rolling = on;
+    if (on) this.body.setSize(HITBOX.w, PHYS.rollHeight).setOffset(0, HITBOX.h - PHYS.rollHeight);
+    else this.body.setSize(HITBOX.w, HITBOX.h).setOffset(0, 0);
+  }
+
+  canStand() {
+    const b = this.body, s = this.scene;
+    const feet = b.y + b.height;
+    const cx = b.x + b.halfWidth;
+    return !s.solidAt(cx - 7, feet - HITBOX.h + 1) && !s.solidAt(cx + 7, feet - HITBOX.h + 1);
+  }
 
   respawn() {
     this.body.reset(this.spawn.x, this.spawn.y);
@@ -318,6 +367,8 @@ class Player {
 
     // --- timers -----------------------------------------------------------
     this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    this.yowlCooldown = Math.max(0, this.yowlCooldown - dt);
+    if (this.catnip > 0) { this.catnip -= dt; if (this.catnip <= 0) { this.catnip = 0; this.scene.hud && this.scene.hud.refresh(); } }
     this.landTimer = Math.max(0, this.landTimer - dt);
     this.jumpFlash = Math.max(0, this.jumpFlash - dt);
     this.coyote = grounded ? PHYS.coyoteTime : Math.max(0, this.coyote - dt);
@@ -353,14 +404,20 @@ class Player {
     }
 
     // --- facing / crouch / dash --------------------------------------------
-    const crouching = grounded && inp.down && this.dashTime <= 0;
-    const dir = crouching ? 0 : (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+    // crouch; Clover keeps rolling while something is overhead
+    const wantCrouch = grounded && inp.down && this.dashTime <= 0;
+    const crouching = wantCrouch || (this.rolling && !this.canStand());
+    if (this.has('roll')) this.setRolling(crouching); else if (this.rolling) this.setRolling(false);
+    const dir = (crouching && !this.rolling) ? 0 : (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
     if (dir !== 0 && this.dashTime <= 0 && dir !== this.facing) {
       if (grounded && Math.abs(b.velocity.x) > 60) this.scene.dust(cx, b.y + b.height, -dir);
       this.facing = dir;
     }
 
-    if (inp.actionPressed && this.dashCooldown <= 0 && this.dashTime <= 0 && !this.locked) {
+    if (inp.actionPressed && this.has('yowl') && !this.locked && this.yowlCooldown <= 0) {
+      this.yowlCooldown = PHYS.yowlCooldown;
+      this.scene.yowl();
+    } else if (inp.actionPressed && !this.has('yowl') && this.dashCooldown <= 0 && this.dashTime <= 0 && !this.locked) {
       this.dashTime = PHYS.dashTime;
       this.dashCooldown = PHYS.dashCooldown;
       this.dashDir = this.facing;
@@ -375,7 +432,11 @@ class Player {
       const ctrl = grounded ? 1 : PHYS.airControl;
       const accel = PHYS.accel * ctrl * dt;
       const decel = PHYS.decel * ctrl * dt;
-      const max = (inp.run ? PHYS.runMax : PHYS.walkMax) * this.speedScale;
+      let mult = this.speedScale;
+      if (this.catnip > 0) mult *= PHYS.catnipSpeed;
+      if (this.rolling) mult *= 0.8;
+      if (this.has('slide') && grounded && this.scene.kitchenAt(cx, b.y + b.height + 1)) mult *= PHYS.slideBoost;
+      const max = (inp.run ? PHYS.runMax : PHYS.walkMax) * mult;
       if (dir !== 0) {
         if (vx * dir < 0)            vx = approach(vx, 0, decel);
         else if (Math.abs(vx) > max) vx = approach(vx, dir * max, decel);
@@ -390,7 +451,7 @@ class Player {
     if (this.buffer > 0 && this.coyote > 0) {
       this.jumpSource = !grounded ? 'COYOTE' : (inp.jumpPressed ? 'normal' : 'BUFFERED');
       this.jumpFlash = 0.8;
-      vy = PHYS.jumpVel;
+      vy = PHYS.jumpVel * (this.catnip > 0 ? PHYS.catnipJump : 1);
       this.buffer = 0;
       this.coyote = 0;
       this.jumping = true;
@@ -438,7 +499,7 @@ class Player {
     else if (this.jumping && vy < 0)            state = 'jump';
     else if (!grounded)                         state = this.floating ? 'float' : (vy < 0 ? 'jump' : 'fall');
     else if (this.landTimer > 0)                state = 'land';
-    else if (crouching)                         state = 'crouch';
+    else if (crouching)                         state = this.rolling && Math.abs(vx) > 2 ? 'roll' : 'crouch';
     else if (Math.abs(vx) > PHYS.runMax * PHYS.runAnimThreshold) state = 'run';
     else if (Math.abs(vx) > 2)                  state = 'walk';
     else                                        state = this.idleTime > 6 ? 'sit-loaf' : 'idle';
@@ -448,6 +509,12 @@ class Player {
 
     this.animate(state, vy, dt);
     this.placeVisuals();
+
+    // catnip: rainbow tail trail
+    if (this.catnip > 0) {
+      this.trailTimer -= dt;
+      if (this.trailTimer <= 0) { this.trailTimer = 0.05; this.scene.rainbowPuff(this.tail.x - this.facing * 10 * this.baseScale, this.tail.y - 12 * this.baseScale); }
+    }
   }
 
   setShadow(on) {
@@ -510,6 +577,7 @@ class Player {
       case 'float': frame('fall0'); break;
       case 'land': play(t + '-land'); break;
       case 'crouch': frame('crouch'); break;
+      case 'roll': frame('crouch'); break;
       case 'hurt': frame('hurt'); break;
       case 'climb':
         if (vy !== 0) play(t + '-walk'); else frame('fall0');
@@ -568,12 +636,25 @@ class Roomba extends Phaser.Physics.Arcade.Sprite {
     this.dir = -1;
     this.alive = true;
     this.kind = 'roomba';
+    this.stunned = 0;
     this.play('roomba-idle');
+  }
+
+  stun(sec) {
+    this.stunned = sec;
+    this.setTint(0x8fa8ff);
   }
 
   preUpdate(t, d) {
     super.preUpdate(t, d);
     if (!this.alive) return;
+    if (this.stunned > 0) {
+      this.stunned -= d / 1000;
+      this.body.setVelocityX(0);
+      this.setVisible(Math.floor(t / 80) % 4 !== 0);
+      if (this.stunned <= 0) { this.clearTint(); this.setVisible(true); }
+      return;
+    }
     const cam = this.scene.cameras.main;
     if (Math.abs(this.x - cam.midPoint.x) > W * 0.75) { this.body.setVelocityX(0); return; }
     if (this.body.blocked.left) this.dir = 1;
@@ -640,6 +721,7 @@ class Hud {
     this.kibbleText = this.text(44, 4);
     this.slot = scene.add.rectangle(74, 3, 14, 12).setOrigin(0).setStrokeStyle(1, 0x3a2a1a, 0.6).setScrollFactor(0).setDepth(d);
     this.slotIcon = scene.add.image(81, 9, 'tuna').setScrollFactor(0).setDepth(d + 1).setVisible(false);
+    this.cool = scene.add.rectangle(74, 16, 14, 2, 0x3a6fbf, 1).setOrigin(0).setScrollFactor(0).setDepth(d + 1).setVisible(false);
     if (showMice) {
       this.miceIcon = scene.add.image(W - 40, 4, 'icon-mouse').setOrigin(0).setScrollFactor(0).setDepth(d);
       this.miceText = this.text(W - 30, 4);
@@ -656,7 +738,10 @@ class Hud {
   refresh() {
     this.lifeText.set('x' + GameState.lives);
     this.kibbleText.set(String(GameState.kibble).padStart(3, '0'));
-    this.slotIcon.setVisible(!!GameState.super);
+    const p = this.scene.player;
+    const icon = (p && p.catnip > 0) ? 'catnip' : GameState.super ? 'tuna' : GameState.bell ? 'bell' : null;
+    this.slotIcon.setVisible(!!icon);
+    if (icon) this.slotIcon.setTexture(icon);
     if (this.miceText) {
       const got = (GameState.mice[this.scene.level.id] || []).length;
       this.miceText.set(got + '/' + this.scene.miceTotal);
@@ -817,23 +902,26 @@ class SelectScene extends Phaser.Scene {
     g.fillStyle(0xd9a765, 1); g.fillRect(16, 118, W - 32, 2);
     g.fillStyle(0x4a2f1a, 1); g.fillRect(16, 127, W - 32, 2);
 
-    this.add.bitmapText(W / 2, 6, 'font', 'CHOOSE YOUR CAT').setOrigin(0.5, 0).setTint(0x3a2414);
 
+    // upper shelf for the second row of portraits
+    g.fillStyle(0xb8844d, 1); g.fillRect(40, 58, W - 80, 6);
+    g.fillStyle(0xd9a765, 1); g.fillRect(40, 58, W - 80, 1);
+    g.fillStyle(0x4a2f1a, 1); g.fillRect(40, 63, W - 80, 1);
     this.keys = CAT_ORDER;
-    const n = this.keys.length;
-    const spacing = 64;
-    const x0 = W / 2 - (n - 1) * spacing / 2;
+    const perRow = 4, spacing = 64;
+    const x0 = W / 2 - (perRow - 1) * spacing / 2;
     this.slots = this.keys.map((key, i) => {
-      const x = x0 + i * spacing, y = 118;
+      const row = Math.floor(i / perRow), c = i % perRow;
+      const x = x0 + c * spacing, y = row === 0 ? 58 : 118;
       const img = this.add.image(x, y, key + '-portrait').setOrigin(0.5, 1).setInteractive();
-      const name = this.add.bitmapText(x, y + 13, 'font', CATS[key].name).setOrigin(0.5, 0).setTint(0x3a2414);
       img.on('pointerdown', () => { if (this.index === i) this.choose(); else { this.index = i; Sfx.select(); } });
-      return { key, x, y, img, name };
+      return { key, x, y, img, row, c };
     });
+    this.nameText = this.add.bitmapText(W / 2, 132, 'font', '').setOrigin(0.5, 0).setTint(0x3a2414);
     this.cursor = this.add.rectangle(0, 0, 52, 52).setStrokeStyle(2, 0xf2c94c, 1).setOrigin(0.5, 1);
     this.paw = this.add.image(0, 0, 'paw-cursor').setOrigin(0.5, 1);
-    this.blurb = this.add.bitmapText(W / 2, 144, 'font', '').setOrigin(0.5, 0).setTint(0x6b4a2a);
-    this.hint = this.add.bitmapText(W / 2, 166, 'font', this.sys.game.device.input.touch ? 'TAP A CAT TWICE' : 'ARROWS  +  SPACE').setOrigin(0.5, 0).setTint(0x8c6d48);
+    this.blurb = this.add.bitmapText(W / 2, 146, 'font', '').setOrigin(0.5, 0).setTint(0x6b4a2a);
+    this.hint = this.add.bitmapText(W / 2, 166, 'font', this.sys.game.device.input.touch ? 'CHOOSE A CAT: TAP TWICE' : 'CHOOSE A CAT: ARROWS + SPACE').setOrigin(0.5, 0).setTint(0x8c6d48);
 
     // Delia's slow 3-star sparkle
     const delia = this.slots.find(s => s.key === 'delia');
@@ -850,7 +938,8 @@ class SelectScene extends Phaser.Scene {
     this.chosen = false;
     const kb = this.input.keyboard;
     this.kLeft = kb.addKey('LEFT'); this.kRight = kb.addKey('RIGHT');
-    this.kA = kb.addKey('A'); this.kD = kb.addKey('D');
+    this.kUp = kb.addKey('UP'); this.kDown = kb.addKey('DOWN');
+    this.kA = kb.addKey('A'); this.kD = kb.addKey('D'); this.kW = kb.addKey('W'); this.kS = kb.addKey('S');
     this.kSpace = kb.addKey('SPACE'); this.kEnter = kb.addKey('ENTER');
     this.t = 0;
   }
@@ -873,20 +962,23 @@ class SelectScene extends Phaser.Scene {
   update(time, delta) {
     const JD = Phaser.Input.Keyboard.JustDown;
     if (!this.chosen) {
-      if (JD(this.kLeft) || JD(this.kA)) { this.index = (this.index + this.keys.length - 1) % this.keys.length; Sfx.select(); }
-      if (JD(this.kRight) || JD(this.kD)) { this.index = (this.index + 1) % this.keys.length; Sfx.select(); }
+      const n = this.keys.length;
+      if (JD(this.kLeft) || JD(this.kA)) { this.index = (this.index + n - 1) % n; Sfx.select(); }
+      if (JD(this.kRight) || JD(this.kD)) { this.index = (this.index + 1) % n; Sfx.select(); }
+      if (JD(this.kUp) || JD(this.kW) || JD(this.kDown) || JD(this.kS)) { this.index = (this.index + 4) % n; Sfx.select(); }
       if (JD(this.kSpace) || JD(this.kEnter)) this.choose();
     }
     const slot = this.slots[this.index];
     this.cursor.x = slot.x; this.cursor.y = slot.y + 2;
-    this.paw.x = slot.x; this.paw.y = slot.y - 52 - Math.abs(Math.sin(time / 300)) * 3;
+    this.paw.x = slot.x - 31 + Math.abs(Math.sin(time / 300)) * 2; this.paw.y = slot.y - 18;
+    this.nameText.setText(CATS[slot.key].name);
     this.blurb.setText(CATS[slot.key].blurb);
     this.t += delta / 1000;
     this.stars.forEach((s, i) => {
       const a = this.t * 0.9 + i * Math.PI * 2 / 3;
       const delia = this.slots.find(x => x.key === 'delia');
       s.x = delia.x + Math.cos(a) * 30;
-      s.y = delia.y - 24 + Math.sin(a) * 22;
+      s.y = delia.y - 24 + Math.sin(a) * 26;
     });
   }
 }
@@ -933,6 +1025,7 @@ class PlayScene extends Phaser.Scene {
     this.touch = null;
     this.dt = 0;
     this.muted = this.muted || false;
+    this.passives = resolvePassives(GameState.cat);
     this.cameras.main.fadeIn(200, 0, 0, 0);
 
     // --- level ---------------------------------------------------------------
@@ -958,7 +1051,7 @@ class PlayScene extends Phaser.Scene {
     const tileset = map.addTilesetImage('tiles', 'tiles', TILE, TILE, 0, 0);
     this.map = map;
     this.layer = map.createLayer(0, tileset, 0, this.mapOffsetY).setDepth(5);
-    this.layer.setCollision([T.FLOOR_TOP, T.FLOOR_FILL, T.SHELF, T.BRICK, T.PAW, T.PAW_USED]);
+    this.layer.setCollision([T.FLOOR_TOP, T.FLOOR_FILL, T.SHELF, T.BRICK, T.PAW, T.PAW_USED, T.KITCHEN, T.COUCH_L, T.COUCH_M, T.COUCH_R, T.RUG]);
     this.layer.forEachTile(tile => {
       if (tile.index === T.SHELF) tile.setCollision(false, false, true, false);
     });
@@ -991,9 +1084,10 @@ class PlayScene extends Phaser.Scene {
       this.tweens.add({ targets: s, y: s.y - 2, duration: 600 + Math.random() * 200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
 
-    // ghost mice (Delia only)
-    const catDef = CATS[GameState.cat];
-    this.seesMice = catDef.passives.includes('ghost');
+    for (const l of level.lamps) this.add.image(tx(l), tbottom(l), 'lamp').setOrigin(0.5, 1).setDepth(2);
+
+    // ghost mice (Delia only, or Biscuit rolling 'ghost')
+    this.seesMice = this.passives.includes('ghost');
     this.miceTotal = level.ghostMice.length;
     this.mice = this.physics.add.group({ allowGravity: false, immovable: true });
     if (this.seesMice) {
@@ -1064,9 +1158,21 @@ class PlayScene extends Phaser.Scene {
       backgroundColor: '#00000088', padding: { x: 2, y: 1 },
     }).setScrollFactor(0).setDepth(1001).setVisible(false);
 
-    // level banner
+    // level banner (+ passive note for Biscuit / Deli)
     const banner = this.add.bitmapText(W / 2, 60, 'font', 'LEVEL ' + level.id).setOrigin(0.5).setScale(2).setScrollFactor(0).setDepth(1500).setTint(0x3a2414);
     this.tweens.add({ targets: banner, alpha: 0, delay: 1200, duration: 400, onComplete: () => banner.destroy() });
+    const catDef = CATS[GameState.cat];
+    let note = null;
+    if (catDef.passives.includes('chaos')) note = 'CHAOS: ' + this.passives[0].toUpperCase();
+    if (this.passives.includes('stocked')) {
+      const pick = POWERUPS[Math.floor(Math.random() * POWERUPS.length)];
+      note = 'STOCKED: ' + pick.toUpperCase();
+      this.time.delayedCall(600, () => { if (this.player && !this.player.dead) this.applyPowerup(pick, this.player.box.x, this.player.box.y); });
+    }
+    if (note) {
+      const sub = this.add.bitmapText(W / 2, 80, 'font', note).setOrigin(0.5).setScrollFactor(0).setDepth(1500).setTint(0x8c3a1a);
+      this.tweens.add({ targets: sub, alpha: 0, delay: 1800, duration: 400, onComplete: () => sub.destroy() });
+    }
   }
 
   drawBackdrop(mapW, worldH) {
@@ -1091,6 +1197,72 @@ class PlayScene extends Phaser.Scene {
   tileAt(wx, wy) { return this.layer.getTileAtWorldXY(wx, wy); }
   solidAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.collides); }
   curtainAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.CURTAIN); }
+  kitchenAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.KITCHEN); }
+
+  rainbowPuff(x, y) {
+    const hue = (this.time.now / 6) % 360;
+    const color = Phaser.Display.Color.HSVToRGB(hue / 360, 0.8, 1).color;
+    const r = this.add.rectangle(x, y, 3, 3, color, 1).setDepth(9);
+    this.tweens.add({ targets: r, alpha: 0, y: y - 6, duration: 400, onComplete: () => r.destroy() });
+  }
+
+  /** Mochi's yowl: stun every enemy on screen. */
+  yowl() {
+    Sfx.yowl();
+    const cam = this.cameras.main;
+    cam.shake(200, 0.004);
+    for (const e of this.enemies.getChildren()) {
+      if (e.alive && e.stun && Math.abs(e.x - cam.midPoint.x) < W * 0.6) e.stun(PHYS.yowlStun);
+    }
+    const p = this.player;
+    p.squash(p.baseScale * 1.3, p.baseScale * 1.3, 220);
+    this.popText(p.box.x, p.box.y - 20, 'YOWL!', 0xc0304a);
+  }
+
+  breakBrick(tile) {
+    const wx = tile.x * TILE, wy = this.mapOffsetY + tile.y * TILE;
+    Sfx.crack();
+    this.layer.removeTileAt(tile.x, tile.y);
+    for (const [ox, oy, vx, vy] of [[3, 3, -70, -220], [11, 3, 70, -220], [3, 11, -50, -150], [11, 11, 50, -150]]) {
+      const bit = this.physics.add.image(wx + ox, wy + oy, 'brick-bit').setDepth(12);
+      bit.body.setVelocity(vx, vy);
+      this.time.delayedCall(900, () => bit.destroy());
+    }
+  }
+
+  /** Which powerup a paw block holds: the first block of a level is always tuna. */
+  powerupFor(tile) {
+    const first = this.level.pawBlocks.reduce((a, b) => (b.x < a.x ? b : a));
+    if (tile.x === first.x && tile.y === first.y) return 'tuna';
+    const h = (tile.x * 7 + tile.y * 13) % 10;
+    return h < 5 ? 'tuna' : h < 8 ? 'catnip' : h < 9 ? 'bell' : 'fish';
+  }
+
+  applyPowerup(kind, x, y) {
+    const p = this.player;
+    switch (kind) {
+      case 'tuna':
+        if (!p.super) p.setSuper(true); else this.popText(x, y - 8, 'YUM');
+        Sfx.powerup();
+        break;
+      case 'catnip':
+        p.catnip = PHYS.catnipTime;
+        Sfx.catnip();
+        this.popText(x, y - 8, 'ZOOMIES', 0x2f8f4f);
+        break;
+      case 'bell':
+        p.bell = true; GameState.bell = true;
+        Sfx.bell();
+        this.popText(x, y - 8, 'JINGLE', 0xb8860b);
+        break;
+      case 'fish':
+        GameState.lives += 1;
+        Sfx.life();
+        this.popText(x, y - 8, '1UP', 0x2f8f4f);
+        break;
+    }
+    this.hud.refresh();
+  }
 
   floorBelow(wx, wy) {
     for (let y = wy; y < this.worldH; y += TILE) {
@@ -1147,17 +1319,11 @@ class PlayScene extends Phaser.Scene {
       this.layer.removeTileAt(tile.x, tile.y);
       bump(T.PAW, () => this.layer.putTileAt(T.PAW_USED, tile.x, tile.y));
       const dir = this.player.facing;
-      this.items.add(new Item(this, wx + 8, wy + 8, 'tuna', dir));
+      this.items.add(new Item(this, wx + 8, wy + 8, this.powerupFor(tile), dir));
       this.time.delayedCall(450, () => Sfx.powerup());
     } else if (tile.index === T.BRICK) {
       if (this.player.super) {
-        Sfx.stomp();
-        this.layer.removeTileAt(tile.x, tile.y);
-        for (const [ox, oy, vx, vy] of [[3, 3, -70, -220], [11, 3, 70, -220], [3, 11, -50, -150], [11, 11, 50, -150]]) {
-          const bit = this.physics.add.image(wx + ox, wy + oy, 'brick-bit').setDepth(12);
-          bit.body.setVelocity(vx, vy);
-          this.time.delayedCall(900, () => bit.destroy());
-        }
+        this.breakBrick(tile);
       } else {
         Sfx.bonk();
         this.layer.removeTileAt(tile.x, tile.y);
@@ -1170,12 +1336,7 @@ class PlayScene extends Phaser.Scene {
 
   onItem(it) {
     if (it.rising) return;
-    if (it.kind === 'tuna') {
-      if (!this.player.super) this.player.setSuper(true);
-      else this.popText(it.x, it.y - 8, 'YUM');
-      this.hud.refresh();
-      Sfx.powerup();
-    }
+    this.applyPowerup(it.kind, it.x, it.y);
     it.destroy();
   }
 
@@ -1258,6 +1419,7 @@ class PlayScene extends Phaser.Scene {
     this.time.delayedCall(1400, () => {
       GameState.lives -= 1;
       GameState.super = false;
+      GameState.bell = false;
       if (GameState.lives <= 0) {
         this.gameOver();
       } else {
@@ -1353,6 +1515,7 @@ class PlayScene extends Phaser.Scene {
         if (cs.t >= 3.5) {
           cs.step = 'done';
           GameState.checkpoint = null;
+          GameState.bell = false;
           const ids = Levels.all();
           const next = ids[ids.indexOf(this.level.id) + 1];
           if (next) { GameState.level = next; this.scene.restart(); }
@@ -1432,6 +1595,33 @@ class PlayScene extends Phaser.Scene {
     const feet = b.y + b.height;
 
     if (b.y > this.worldH + 8) { this.die(); return; }
+
+    // Marmalade's Bonk: dashing into a brick breaks it (momentum counts for a
+    // moment after the dash ends, so clipping a wall at the tail of a dash works)
+    if (p.has('bonk') && (p.dashTime > 0 || p.dashCooldown > PHYS.dashCooldown - PHYS.dashTime - 0.15) && (b.blocked.left || b.blocked.right)) {
+      const t = this.tileAt(cx + p.dashDir * (b.halfWidth + 3), b.y + b.halfHeight);
+      if (t && t.index === this.T.BRICK) { this.breakBrick(t); p.dashTime = Math.max(p.dashTime, 0.08); }
+    }
+
+    // bell collar: kibble within range drifts to the cat
+    if (p.bell) {
+      for (const k of this.kibble.getChildren()) {
+        if (!k.active) continue;
+        const dx = cx - k.x, dy = (b.y + b.halfHeight) - k.y;
+        const d = Math.hypot(dx, dy);
+        if (d < PHYS.bellRange && d > 1) { const s = 140 * dt / d; k.x += dx * s; k.y += dy * s; }
+      }
+    }
+
+    // Mochi's cooldown bar
+    if (this.hud.cool) {
+      const on = p.has('yowl');
+      this.hud.cool.setVisible(on);
+      if (on) this.hud.cool.width = 14 * (1 - p.yowlCooldown / PHYS.yowlCooldown);
+    }
+
+    // catnip: gentle screen wobble
+    this.cameras.main.setZoom(p.catnip > 0 ? 1 + Math.sin(time / 90) * 0.012 : 1);
 
     for (const x of [b.x + 3, b.x + b.width - 3]) {
       const t = this.tileAt(x, feet - 1);
