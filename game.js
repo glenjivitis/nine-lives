@@ -275,15 +275,7 @@ const Music = (() => {
     if (inBar === 4 || inBar === 12) snare(t0 + stepLen * 0.03);
     if (inBar % 2 === 0) hat(t0 + swing, false);
     if (inBar === 14 && rnd() < 0.4) hat(t0 + swing, true);
-    // melody: sparse pentatonic phrase, chord tones favoured, varies every second loop
-    const busy = (loop % 2 === 0) ? 0.32 : 0.42;
-    if (rnd() < busy && inBar !== 0) {
-      const useChord = rnd() < 0.55;
-      const semi = useChord ? chord[Math.floor(rnd() * chord.length)] : T.scale[Math.floor(rnd() * T.scale.length)] + (rnd() < 0.5 ? 12 : 0);
-      const oct = rnd() < 0.2 ? 4 : 5;
-      const len = stepLen * (rnd() < 0.3 ? 4 : 2);
-      osc('triangle', freq(T.key + semi, oct), t0 + swing, len, 0.075, { attack: 0.02, release: 0.15, detune: (rnd() - 0.5) * 12, lowpass: 2600 });
-    }
+    // (no lead melody: the pad, bass and drums carry it; a lead read as shrill)
   }
 
   function tick() {
@@ -445,6 +437,7 @@ class Player {
     this.hurtTimer = 0;
     this.dead = false;
     this.climbing = false;
+    this.climbCooldown = 0;
     this.autoInput = null;
     this.speedScale = 1;
     this.locked = false;
@@ -569,21 +562,29 @@ class Player {
     if (grounded) { this.jumping = false; this.jumpCut = false; this.doubleUsed = false; }
 
     // --- curtain climbing ---------------------------------------------------
-    const onCurtain = this.scene.curtainAt(cx, cy) || this.scene.curtainAt(cx, b.y + 2);
-    if (!this.climbing && onCurtain && this.hurtTimer <= 0 && (inp.up || (inp.down && !grounded))) this.startClimb();
+    this.climbCooldown = Math.max(0, this.climbCooldown - dt);
+    const feetY = b.y + b.height;
+    const onCurtain = this.scene.curtainAt(cx, cy) || this.scene.curtainAt(cx, b.y + 2) || this.scene.curtainAt(cx, feetY - 1);
+    if (!this.climbing && onCurtain && this.climbCooldown <= 0 && this.hurtTimer <= 0 && (inp.up || (inp.down && !grounded))) this.startClimb();
     if (this.climbing) {
       if (!onCurtain || (grounded && inp.down)) {
         this.stopClimb();
       } else if (inp.jumpPressed) {
+        // jump off: a full jump, and no re-grab for a moment even if Up is still held
         this.stopClimb();
-        b.setVelocityY(PHYS.jumpVel * 0.85);
+        this.climbCooldown = 0.35;
+        b.setVelocityY(PHYS.jumpVel);
         this.jumping = true; this.jumpCut = false;
         this.buffer = 0;
         this.onJump();
       } else {
         const dir = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
         if (dir) this.facing = dir;
-        const vy = (inp.up ? -PHYS.climbSpeed : 0) + (inp.down ? PHYS.climbSpeed : 0);
+        let vy = (inp.up ? -PHYS.climbSpeed : 0) + (inp.down ? PHYS.climbSpeed : 0);
+        // perch on the rod: never climb past the top of the curtain
+        const topY = this.scene.curtainTopY(cx, feetY - 1);
+        if (vy < 0 && feetY <= topY + 1) { vy = 0; b.y = topY + 1 - b.height; }
+        this.perched = feetY <= topY + 1;
         b.setVelocity(dir * 40, vy);
         this.state = 'climb';
         this.grounded = false;
@@ -781,7 +782,7 @@ class Player {
       case 'roll': frame('crouch'); break;
       case 'hurt': frame('hurt'); break;
       case 'climb':
-        if (vy !== 0) play(t + '-walk'); else frame('fall0');
+        if (vy !== 0) play(t + '-walk'); else frame(this.perched ? 'idle0' : 'fall0');
         break;
     }
 
@@ -1718,6 +1719,13 @@ class PlayScene extends Phaser.Scene {
   solidAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.collides); }
   curtainAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && (t.index === this.T.CURTAIN || t.index === this.T.CURTAIN_TOP)); }
   kitchenAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.KITCHEN); }
+  /** World y of the top edge of the topmost curtain tile in this column. */
+  curtainTopY(wx, wy) {
+    let t = this.tileAt(wx, wy);
+    if (!t) return -9999;
+    while (t.y > 0) { const up = this.layer.getTileAt(t.x, t.y - 1); if (!up || (up.index !== this.T.CURTAIN && up.index !== this.T.CURTAIN_TOP)) break; t = up; }
+    return this.mapOffsetY + t.y * TILE;
+  }
 
   rainbowPuff(x, y) {
     const hue = (this.time.now / 6) % 360;
