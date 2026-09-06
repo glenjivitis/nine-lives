@@ -954,7 +954,7 @@ class Hud {
     if (icon) this.slotIcon.setTexture(icon);
     const it = p && p.item;
     this.itemIcon.setVisible(!!it);
-    if (it) { this.itemIcon.setTexture(it.kind); this.itemText.set(it.kind === 'box' ? 'HOLD B' : 'x' + it.charges); } else this.itemText.set('');
+    if (it) { this.itemIcon.setTexture(it.kind); this.itemText.set(it.kind === 'box' ? (this.scene.touch ? 'HOLD B' : 'HOLD SHIFT') : 'x' + it.charges); } else this.itemText.set('');
     if (this.miceText) {
       const got = (GameState.mice[this.scene.level.id] || []).length;
       this.miceText.set(got + '/' + this.scene.miceTotal);
@@ -1459,6 +1459,7 @@ class PlayScene extends Phaser.Scene {
     this.keyMute = kb.addKey('M');
     this.keyPause = kb.addKey('ESC');
     this.keyPause2 = kb.addKey('P');
+    this.keyAct = kb.addKeys({ b: 'B', x: 'X' });   // B / X double as the action button on keyboards
     kb.on('keydown', () => { Sfx.unlock(); if (this.touch) this.touch.setVisible(false); });
     this.input.on('pointerdown', () => { Sfx.unlock(); });
     if (this.sys.game.device.input.touch) this.touch = new TouchControls(this);
@@ -1815,7 +1816,7 @@ class PlayScene extends Phaser.Scene {
       case 'yarn':
         p.item = { kind, charges: ITEM_CHARGES[kind] };
         Sfx.powerup();
-        this.popText(x, y - 8, kind === 'box' ? 'HOLD B TO HIDE' : kind === 'laser' ? 'B: LASER' : 'B: THROW', 0x3a6fbf);
+        { const k = this.touch ? 'B' : 'SHIFT'; this.popText(x, y - 8, kind === 'box' ? 'HOLD ' + k + ' TO HIDE' : kind === 'laser' ? k + ': LASER' : k + ': THROW', 0x3a6fbf); }
         break;
     }
     this.hud.refresh();
@@ -2136,8 +2137,8 @@ class PlayScene extends Phaser.Scene {
       down: c.down.isDown || w.down.isDown,
       jump: c.space.isDown || (t && t.jump),
       jumpPressed: JustDown(c.space) || (t && t.jumpPressed),
-      run: c.shift.isDown || (t && t.action),
-      actionPressed: JustDown(c.shift) || (t && t.actionPressed),
+      run: c.shift.isDown || this.keyAct.b.isDown || this.keyAct.x.isDown || (t && t.action),
+      actionPressed: JustDown(c.shift) || JustDown(this.keyAct.b) || JustDown(this.keyAct.x) || (t && t.actionPressed),
     };
   }
 

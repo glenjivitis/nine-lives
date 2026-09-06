@@ -20,7 +20,7 @@ Then open http://localhost:8000/ in a browser.
 |---|---|---|
 | Move | Arrow keys or WASD | Left / right buttons |
 | Jump (hold for height) | Space | A |
-| Run (hold) / dash or item (tap) | Shift | B |
+| Run (hold) / dash or use item (tap) | Shift, B, or X | B |
 | Crouch / climb curtains | Down / Up | - |
 | Pause | Esc or P | Corner button |
 | Mute | M | - |
