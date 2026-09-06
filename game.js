@@ -68,6 +68,7 @@ const GameState = {
   checkpoint: null,   // { level, x, y }
   super: false,
   mice: {},           // level id -> [collected indices]
+  climbed: false,     // has the player used a curtain yet (drives the hint)
   bell: false,        // bell collar lasts the rest of the level
   afterBonus: null,   // campaign level to resume after the bonus level
 };
@@ -360,6 +361,7 @@ class Player {
 
   startClimb() {
     this.climbing = true;
+    if (!GameState.climbed) { GameState.climbed = true; const h = this.scene.climbHint; if (h) { this.scene.tweens.killTweensOf([h.bg, h.txt]); h.bg.destroy(); h.txt.destroy(); this.scene.climbHint = null; } }
     this.body.setAllowGravity(false);
     this.body.setVelocity(0, 0);
     this.jumping = false;
@@ -1405,6 +1407,17 @@ class PlayScene extends Phaser.Scene {
     this.items = this.physics.add.group();
     this.physics.add.collider(this.items, this.layer);
 
+    // teach the curtains: a hint over the first one until the cat has climbed
+    this.climbHint = null;
+    if (level.curtains.length && !GameState.climbed) {
+      const first = level.curtains.reduce((a, c) => (c.x < a.x || (c.x === a.x && c.y < a.y) ? c : a));
+      const hx = tx(first), hy = this.mapOffsetY + first.y * TILE - 6;
+      const bg = this.add.rectangle(hx, hy, 52, 11, 0x1a1410, 0.7).setDepth(49);
+      const txt = this.add.bitmapText(hx, hy, 'font', 'UP: CLIMB').setOrigin(0.5).setDepth(50).setTint(0xfff4dc);
+      this.climbHint = { bg, txt, x: hx };
+      this.tweens.add({ targets: [bg, txt], y: hy - 3, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+
     this.bowls = level.checkpoints.map(c => {
       const s = this.add.image(tx(c), tbottom(c), 'bowl', 0).setOrigin(0.5, 1).setDepth(7);
       return { sprite: s, x: tx(c), y: tbottom(c), done: false };
@@ -1532,7 +1545,7 @@ class PlayScene extends Phaser.Scene {
   // --- tile queries -------------------------------------------------------------
   tileAt(wx, wy) { return this.layer.getTileAtWorldXY(wx, wy); }
   solidAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.collides); }
-  curtainAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.CURTAIN); }
+  curtainAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && (t.index === this.T.CURTAIN || t.index === this.T.CURTAIN_TOP)); }
   kitchenAt(wx, wy) { const t = this.tileAt(wx, wy); return !!(t && t.index === this.T.KITCHEN); }
 
   rainbowPuff(x, y) {
@@ -1910,7 +1923,8 @@ class PlayScene extends Phaser.Scene {
     const dir = (this.player.body.x + HITBOX.w / 2) < c.x ? -1 : 1;
     this.player.launch(dir);
     Sfx.yelp();
-    this.popText(this.player.box.x, this.player.box.y - 16, '!!', 0xc03030);
+    this.popText(this.player.box.x, this.player.box.y - 16, GameState.cucumbered ? '!!' : 'CUCUMBER!!', 0x2f8f2f);
+    GameState.cucumbered = true;
   }
 
   spawnCucumber(trig) {

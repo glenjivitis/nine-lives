@@ -672,7 +672,7 @@ const Sprites = (() => {
   // ------------------------------------------------------------------------
   // World 1 tileset (16x16). Index order matters: see TILE below.
   // ------------------------------------------------------------------------
-  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7, KITCHEN: 8, COUCH_L: 9, COUCH_M: 10, COUCH_R: 11, RUG: 12, WATER: 13, DECOR: 14, BLOCK: 15 };
+  const TILE = { FLOOR_TOP: 0, FLOOR_FILL: 1, SHELF: 2, BRICK: 3, PAW: 4, TACKS: 5, CURTAIN: 6, PAW_USED: 7, KITCHEN: 8, COUCH_L: 9, COUCH_M: 10, COUCH_R: 11, RUG: 12, WATER: 13, DECOR: 14, BLOCK: 15, CURTAIN_TOP: 16 };
 
   const TILE_PAL = [
     '#4a2f1a', // 0 dark seam
@@ -840,22 +840,40 @@ const Sprites = (() => {
     '................',
   ];
   const T_CURTAIN = [
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
-    '....fghgfghg....',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+  ];
+  const T_CURTAIN_TOP = [
+    '0000000000000000',
+    '3333333333333333',
+    '.3.f3g.3h.f3g.3.',
+    '..fgghfgghfgghf.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
+    '.fgghfgghfgghfg.',
   ];
 
   const T_KITCHEN = [
@@ -917,10 +935,10 @@ const Sprites = (() => {
   function buildTiles() {
     for (const w of Object.keys(WORLD_TILES)) {
       const t = WORLD_TILES[w];
-      makeSprite('tiles-w' + w, [t.top, t.fill, t.shelf, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, t.decor, t.block], TILE_PAL);
+      makeSprite('tiles-w' + w, [t.top, t.fill, t.shelf, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, t.decor, t.block, T_CURTAIN_TOP], TILE_PAL);
     }
     // alias for anything still asking for 'tiles'
-    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, T_CURTAIN, T_BRICK], TILE_PAL);
+    makeSprite('tiles', [T_FLOOR_TOP, T_FLOOR_FILL, T_SHELF, T_BRICK, T_PAW, T_TACKS, T_CURTAIN, T_PAW_USED, T_KITCHEN, T_COUCH_L, T_COUCH_M, T_COUCH_R, T_RUG, T_WATER, T_CURTAIN, T_BRICK, T_CURTAIN_TOP], TILE_PAL);
   }
 
   // ------------------------------------------------------------------------
@@ -1136,14 +1154,15 @@ const Sprites = (() => {
 
     // Cucumber 16x7
     makeSprite('cucumber', [[
-      '....00000000....',
-      '..0011222211100.',
-      '.011111111111110',
-      '0111111111111110',
-      '0111111111111110',
+      '.....0.00.0.....',
+      '...00212212000..',
+      '..0122222222210.',
+      '.01221221221221 0'.replace(' ', ''),
+      '0122212212212210',
+      '0112221221222110',
       '.01111111111110.',
       '..000000000000..',
-    ]], ['#1f4d1f', '#3f8f3f', '#6fbf5f', '#dfe7c0'], { width: 16, height: 16, align: 'bottom' });
+    ]], ['#1f4d1f', '#3f8f3f', '#7fd060', '#dfe7c0'], { width: 16, height: 16, align: 'bottom' });
 
     // Tuna can 12x9
     makeSprite('tuna', [[
