@@ -14,7 +14,7 @@ const MAX_ZOOM = 4;            // spec: 320x180 scaled x4 (shrinks to fit small 
 const PHYS = {
   gravity: 1400,
   walkMax: 110,
-  runMax: 170,
+  runMax: 170,             // no sprint; only the threshold for the ears-back animation (catnip, Pickle)
   accel: 900,
   decel: 1300,
   jumpVel: -380,
@@ -47,9 +47,9 @@ const PHYS = {
   yowlCooldown: 8,
   slideBoost: 1.5,
   rollHeight: 10,
-  chaseScroll: 62,
-  dogSpeed: 74,
-  vacuumPull: 130,
+  chaseScroll: 56,
+  dogSpeed: 66,
+  vacuumPull: 90,          // slower than walking so you can back away, faster than standing still
   bathFillTime: 60,
   yarnSpeed: 200,
   laserRange: 160,
@@ -57,7 +57,7 @@ const PHYS = {
 
 const HITBOX = { w: 20, h: 18 };
 
-const NO_INPUT = Object.freeze({ left: false, right: false, up: false, down: false, jump: false, jumpPressed: false, run: false, actionPressed: false });
+const NO_INPUT = Object.freeze({ left: false, right: false, up: false, down: false, jump: false, jumpPressed: false, action: false, actionPressed: false });
 
 // Persistent run state
 const GameState = {
@@ -134,6 +134,7 @@ const Sfx = (() => {
   }
   return {
     unlock() { ac(); },
+    ctx() { return ac(); },
     setMuted(m) { muted = m; },
     jump()   { tone({ f0: 320, f1: 640, dur: 0.12, vol: 0.10 }); },
     land()   { noise(0.06, 0.12, 500); },
@@ -148,7 +149,7 @@ const Sfx = (() => {
     checkpoint() { [660, 880].forEach((f, i) => tone({ f0: f, dur: 0.1, vol: 0.08, delay: i * 0.09 })); },
     door()   { noise(0.4, 0.06, 300); [523, 659, 784, 1046].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.25, vol: 0.10, delay: 0.3 + i * 0.12 })); },
     life()   { this.purr(); },
-    mouse()  { [1200, 1600, 2000].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.08, vol: 0.06, delay: i * 0.06 })); },
+    mouse()  { [880, 660, 440].forEach((f, i) => tone({ type: 'sine', f0: f, f1: f * 0.9, dur: 0.18, vol: 0.06, delay: i * 0.12 })); },   // a soft descending snore
     meow()   { tone({ type: 'square', f0: 620, f1: 880, dur: 0.14, vol: 0.10 }); tone({ type: 'square', f0: 880, f1: 480, dur: 0.22, vol: 0.10, delay: 0.14 }); },
     chime()  { [784, 988, 1175, 1568].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.35, vol: 0.08, delay: i * 0.1 })); },
     select() { tone({ f0: 500, f1: 700, dur: 0.05, vol: 0.06 }); },
@@ -169,12 +170,159 @@ const Sfx = (() => {
   };
 })();
 
+
+// ---------------------------------------------------------------------------
+// Music (spec §9): a procedural lofi loop. Swung drums, a warm filtered pad on
+// seventh chords, a soft bass, a wandering pentatonic melody and vinyl crackle,
+// all from oscillators and noise. One theme per world; nothing is streamed.
+// ---------------------------------------------------------------------------
+const Music = (() => {
+  // chords as semitones from the key root; each chord holds for one bar
+  const THEMES = {
+    home:  { key: 0, bpm: 72, chords: [[5, 9, 12, 16], [4, 7, 11, 14], [2, 5, 9, 12], [0, 4, 7, 11]], scale: [0, 2, 4, 7, 9] },   // Fmaj7 Em7 Dm7 Cmaj7
+    w2:    { key: 2, bpm: 76, chords: [[0, 4, 7, 11], [9, 12, 16, 19], [5, 9, 12, 16], [7, 11, 14, 17]], scale: [0, 2, 4, 7, 9] },  // I vi IV V7
+    w3:    { key: -3, bpm: 68, chords: [[9, 12, 16, 19], [5, 9, 12, 16], [2, 5, 9, 12], [4, 8, 11, 14]], scale: [0, 3, 5, 7, 10] }, // Am7 Fmaj7 Dm7 E7, minor pentatonic
+    w4:    { key: -1, bpm: 74, chords: [[2, 5, 9, 12], [7, 10, 14, 17], [0, 4, 7, 11], [5, 9, 12, 16]], scale: [0, 2, 4, 7, 9] },   // Dm7 Gm7 Cmaj7 Fmaj7
+    w5:    { key: 3, bpm: 70, chords: [[5, 9, 12, 16], [7, 11, 14, 17], [4, 7, 11, 14], [9, 12, 16, 19]], scale: [0, 2, 4, 7, 9] },  // Fmaj7 G7 Em7 Am7
+    boss:  { key: -3, bpm: 84, chords: [[9, 12, 16, 19], [8, 11, 14, 17], [9, 12, 16, 19], [4, 8, 11, 14]], scale: [0, 3, 5, 7, 10], heavy: true },
+  };
+  const C4 = 261.63;
+  const freq = (semi, oct = 4) => C4 * Math.pow(2, (semi + (oct - 4) * 12) / 12);
+
+  let ctx = null, master = null, tone = null, crackleSrc = null;
+  let timer = null, theme = null, themeKey = null, step = 0, loop = 0, nextTime = 0;
+  let muted = false, ducked = false, seed = 1, stats = { notes: 0 };
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+
+  function ensure() {
+    if (ctx) return ctx;
+    ctx = Sfx.ctx();
+    if (!ctx) return null;
+    tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 2400; tone.Q.value = 0.6;
+    master = ctx.createGain(); master.gain.value = 0;
+    tone.connect(master).connect(ctx.destination);
+    return ctx;
+  }
+  function targetGain() { return muted ? 0 : (ducked ? 0.18 : 0.42); }
+  function applyGain(ramp = 0.6) {
+    if (!master) return;
+    const t = ctx.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(master.gain.value, t);
+    master.gain.linearRampToValueAtTime(targetGain(), t + ramp);
+  }
+
+  function osc(type, f, t0, dur, vol, opts = {}) {
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t0);
+    if (opts.detune) o.detune.value = opts.detune;
+    const a = opts.attack || 0.01, r = opts.release || 0.08;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(vol, t0 + a);
+    g.gain.setValueAtTime(vol, t0 + Math.max(a, dur - r));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur + 0.02);
+    let dest = tone;
+    if (opts.lowpass) { const f2 = ctx.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = opts.lowpass; f2.connect(tone); dest = f2; }
+    o.connect(g).connect(dest);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+    stats.notes++;
+  }
+  let noiseBuf = null;
+  function noise(t0, dur, vol, type, f, q = 1) {
+    if (!noiseBuf) { const n = ctx.sampleRate * 2; noiseBuf = ctx.createBuffer(1, n, ctx.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; }
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const flt = ctx.createBiquadFilter(); flt.type = type; flt.frequency.value = f; flt.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(flt).connect(g).connect(tone);
+    src.start(t0, Math.random() * 1.5); src.stop(t0 + dur + 0.02);
+  }
+  function kick(t0, heavy) { const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(heavy ? 150 : 120, t0); o.frequency.exponentialRampToValueAtTime(42, t0 + 0.12); g.gain.setValueAtTime(heavy ? 0.9 : 0.7, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28); o.connect(g).connect(tone); o.start(t0); o.stop(t0 + 0.3); }
+  function snare(t0) { noise(t0, 0.16, 0.22, 'bandpass', 1900, 0.8); const o = ctx.createOscillator(); const g = ctx.createGain(); o.type = 'triangle'; o.frequency.setValueAtTime(190, t0); o.frequency.exponentialRampToValueAtTime(120, t0 + 0.08); g.gain.setValueAtTime(0.25, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12); o.connect(g).connect(tone); o.start(t0); o.stop(t0 + 0.14); }
+  function hat(t0, open) { noise(t0, open ? 0.18 : 0.045, open ? 0.06 : 0.05, 'highpass', 6500, 0.7); }
+
+  function startCrackle() {
+    if (crackleSrc) return;
+    const n = ctx.sampleRate * 3; const buf = ctx.createBuffer(1, n, ctx.sampleRate); const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) { d[i] = (Math.random() * 2 - 1) * 0.35; if (Math.random() < 0.00045) d[i] = (Math.random() < 0.5 ? -1 : 1) * 0.9; }
+    const src = ctx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const flt = ctx.createBiquadFilter(); flt.type = 'bandpass'; flt.frequency.value = 3200; flt.Q.value = 0.5;
+    const g = ctx.createGain(); g.gain.value = 0.05;
+    src.connect(flt).connect(g).connect(tone);
+    src.start();
+    crackleSrc = src;
+  }
+
+  function playStep(i, t0) {
+    const T = theme; const stepLen = 60 / T.bpm / 4;
+    const bar = Math.floor(i / 16), inBar = i % 16;
+    const chord = T.chords[bar % T.chords.length];
+    const swing = (inBar % 2 === 1) ? stepLen * 0.55 : 0;   // lay back the off 16ths
+    // pad: whole-bar chord, gentle attack, warm and low in the mix
+    if (inBar === 0) {
+      const dur = stepLen * 16;
+      chord.forEach((semi, k) => osc(k === 0 ? 'triangle' : 'sine', freq(T.key + semi, 4), t0, dur, 0.055, { attack: 0.5, release: 0.6, detune: (k - 1.5) * 4, lowpass: 900 }));
+      osc('triangle', freq(T.key + chord[0], 3), t0, dur, 0.03, { attack: 0.6, release: 0.6, lowpass: 600 });
+    }
+    // bass: root on 1, fifth-ish pickup before 3, root on 3
+    if (inBar === 0 || inBar === 8) osc('sine', freq(T.key + chord[0], 2), t0, stepLen * 6, 0.22, { attack: 0.02, release: 0.2 });
+    if (inBar === 6 && rnd() < 0.7) osc('sine', freq(T.key + chord[2], 2), t0 + swing, stepLen * 1.5, 0.14, { attack: 0.02, release: 0.1 });
+    if (inBar === 14 && rnd() < 0.5) osc('sine', freq(T.key + chord[0] - 2, 2), t0 + swing, stepLen * 1.5, 0.12, { attack: 0.02, release: 0.1 });
+    // drums (swung 8ths on the hats)
+    const heavy = !!T.heavy;
+    if (inBar === 0 || inBar === 8 || (inBar === 10 && rnd() < (heavy ? 0.8 : 0.35)) || (heavy && inBar === 6)) kick(t0, heavy);
+    if (inBar === 4 || inBar === 12) snare(t0 + stepLen * 0.03);
+    if (inBar % 2 === 0) hat(t0 + swing, false);
+    if (inBar === 14 && rnd() < 0.4) hat(t0 + swing, true);
+    // melody: sparse pentatonic phrase, chord tones favoured, varies every second loop
+    const busy = (loop % 2 === 0) ? 0.32 : 0.42;
+    if (rnd() < busy && inBar !== 0) {
+      const useChord = rnd() < 0.55;
+      const semi = useChord ? chord[Math.floor(rnd() * chord.length)] : T.scale[Math.floor(rnd() * T.scale.length)] + (rnd() < 0.5 ? 12 : 0);
+      const oct = rnd() < 0.2 ? 4 : 5;
+      const len = stepLen * (rnd() < 0.3 ? 4 : 2);
+      osc('triangle', freq(T.key + semi, oct), t0 + swing, len, 0.075, { attack: 0.02, release: 0.15, detune: (rnd() - 0.5) * 12, lowpass: 2600 });
+    }
+  }
+
+  function tick() {
+    if (!ctx || !theme) return;
+    const stepLen = 60 / theme.bpm / 4;
+    while (nextTime < ctx.currentTime + 0.3) {
+      playStep(step, nextTime);
+      nextTime += stepLen;
+      step = (step + 1) % (theme.chords.length * 16);
+      if (step === 0) loop++;
+    }
+  }
+
+  return {
+    play(key) {
+      if (!THEMES[key]) key = 'home';
+      if (themeKey === key && timer) return;
+      if (!ensure()) return;
+      themeKey = key; theme = THEMES[key]; step = 0; loop = 0; seed = key.length * 7919 + 17;
+      nextTime = ctx.currentTime + 0.1;
+      startCrackle();
+      applyGain(0.8);
+      if (!timer) timer = setInterval(tick, 60);
+    },
+    stop() { if (master) applyGain(0.4); if (timer) { clearInterval(timer); timer = null; } themeKey = null; theme = null; },
+    setMuted(m) { muted = m; if (ctx) applyGain(0.3); },
+    duck(on) { ducked = on; if (ctx) applyGain(0.4); },
+    resume() { if (ctx && ctx.state === 'suspended') ctx.resume(); },
+    stats() { return { theme: themeKey, notes: stats.notes, state: ctx && ctx.state, step, loop }; },
+    themeFor(level) { if (!level) return 'home'; if (level.boss) return 'boss'; return level.world === 1 ? 'home' : 'w' + level.world; },
+  };
+})();
+
 // ---------------------------------------------------------------------------
 // Cat definitions (spec §1). Passives: shadow, double, float, ghost.
 // ---------------------------------------------------------------------------
 const CATS = {
   scottie:   { name: 'SCOTTIE', texture: 'scottie', passives: ['shadow', 'double'], sound: 'meow', blurb: 'SHADOW: STAND STILL TO VANISH' },
-  delia:     { name: 'DELIA', texture: 'delia', passives: ['float', 'ghost'], sound: 'chime', blurb: 'FLOAT: HOLD JUMP. SEES GHOST MICE' },
+  delia:     { name: 'DELIA', texture: 'delia', passives: ['float', 'ghost'], sound: 'chime', blurb: 'FLOAT: HOLD JUMP. CATCHES ZS' },
   marmalade: { name: 'MARMALADE', texture: 'marmalade', passives: ['bonk'], sound: 'meow', blurb: 'BONK: DASH THROUGH BRICKS' },
   mochi:     { name: 'MOCHI', texture: 'mochi', passives: ['yowl'], sound: 'meow', blurb: 'YOWL: ACTION STUNS EVERYONE' },
   pickle:    { name: 'PICKLE', texture: 'pickle', passives: ['slide'], sound: 'meow', blurb: 'SLIDE: FAST ON KITCHEN TILES' },
@@ -211,7 +359,8 @@ function registerAnims(scene) {
   Sprites.addAnim(scene, 'kibble-glint', 'kibble', 0, 1, 2, -1);
   Sprites.addAnim(scene, 'roomba-idle', 'roomba', 0, 1, 3, -1);
   Sprites.addAnim(scene, 'roomba-hurt', 'roomba', 2, 3, 12, -1);
-  Sprites.addAnim(scene, 'ghost-mouse-idle', 'ghost-mouse', 0, 1, 4, -1);
+  Sprites.addAnim(scene, 'ghost-mouse-idle', 'ghost-mouse', 0, 1, 3, -1);
+  Sprites.addAnim(scene, 'halo-shimmer', 'halo', 0, 2, 5, -1);
   const G = Sprites.FRAMES.glen;
   for (const who of ['glen', 'em']) {
     Sprites.addAnim(scene, who + '-wave', who, G.wave0, G.wave1, 2, -1);
@@ -226,13 +375,19 @@ function makeCatActor(scene, catKey, x, y, depth = 10) {
   const tail = scene.add.sprite(x, y, cat.texture + '-tail').setOrigin(0.5, 1).setDepth(depth);
   const body = scene.add.sprite(x, y, cat.texture).setOrigin(0.5, 1).setDepth(depth + 1);
   tail.play(cat.texture + '-tail-sway');
+  let halo = null;
+  if (catKey === 'delia') {
+    halo = scene.add.sprite(x, y - 30, 'halo').setDepth(depth + 2);
+    halo.play('halo-shimmer');
+    scene.tweens.add({ targets: halo, y: y - 33, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  }
   return {
-    body, tail, cat,
-    setPos(nx, ny) { body.x = nx; tail.x = nx; body.y = ny; tail.y = ny; },
+    body, tail, halo, cat,
+    setPos(nx, ny) { body.x = nx; tail.x = nx; body.y = ny; tail.y = ny; if (halo) { halo.x = nx; } },
     setFlip(f) { body.setFlipX(f); tail.setFlipX(f); },
     play(name) { body.play(cat.texture + '-' + name); },
     sit() { body.play(cat.texture + '-sit'); tail.setVisible(false); },
-    destroy() { body.destroy(); tail.destroy(); },
+    destroy() { body.destroy(); tail.destroy(); if (halo) halo.destroy(); },
   };
 }
 
@@ -258,6 +413,9 @@ class Player {
     this.sprite = scene.add.sprite(x, groundY, this.cat.texture).setOrigin(0.5, 1).setDepth(11);
     this.glint = scene.add.image(x, groundY, 'glint').setDepth(12).setVisible(false);
     this.tail.play(this.cat.texture + '-tail-sway');
+    // Delia's halo: floats above her head, shimmers, bobs
+    this.halo = null;
+    if (catKey === 'delia') { this.halo = scene.add.sprite(x, groundY - 30, 'halo').setDepth(12); this.halo.play('halo-shimmer'); this.haloT = 0; }
 
     this.facing = 1;
     this.coyote = 0;
@@ -381,7 +539,7 @@ class Player {
     if (this.autoInput) inp = this.autoInput(rawInp, dt);
     if (this.hurtTimer > 0) { this.hurtTimer -= dt; inp = NO_INPUT; }
     // cardboard box: hold action to hide (invulnerable, can't move)
-    const wantHide = !!(this.item && this.item.kind === 'box' && inp.run && this.grounded && this.hurtTimer <= 0 && !this.locked);
+    const wantHide = !!(this.item && this.item.kind === 'box' && inp.action && this.grounded && this.hurtTimer <= 0 && !this.locked);
     if (wantHide !== this.hiding) {
       this.hiding = wantHide;
       this.boxSprite.setVisible(wantHide);
@@ -471,7 +629,7 @@ class Player {
       if (this.catnip > 0) mult *= PHYS.catnipSpeed;
       if (this.rolling) mult *= 0.8;
       if (this.has('slide') && grounded && this.scene.kitchenAt(cx, b.y + b.height + 1)) mult *= PHYS.slideBoost;
-      const max = (inp.run ? PHYS.runMax : PHYS.walkMax) * mult;
+      const max = PHYS.walkMax * mult;   // no sprint: one walking speed, dash for bursts
       if (dir !== 0) {
         if (vx * dir < 0)            vx = approach(vx, 0, decel);
         else if (Math.abs(vx) > max) vx = approach(vx, dir * max, decel);
@@ -565,6 +723,13 @@ class Player {
     this.sprite.x = px; this.sprite.y = py;
     this.tail.x = px; this.tail.y = py;
     this.boxSprite.x = px; this.boxSprite.y = py;
+    if (this.halo) {
+      this.haloT = (this.haloT || 0) + (this.scene.dt || 0.016);
+      const crouched = this.rolling || this.state === 'crouch' || this.state === 'roll';
+      this.halo.x = px + (this.state === 'sit-loaf' ? 0 : this.facing * 2);
+      this.halo.y = py - (crouched ? 18 : 30) * this.baseScale + Math.sin(this.haloT * 3.5) * 2;
+      this.halo.setAlpha(this.sprite.alpha).setVisible(this.sprite.visible);
+    }
     const flip = this.facing < 0;
     this.sprite.setFlipX(flip);
     this.tail.setFlipX(flip);
@@ -1072,10 +1237,12 @@ class TitleScene extends Phaser.Scene {
       this.cats.push(a);
     });
 
+    Music.play('home');
     const go = () => {
       if (this.started) return;
       this.started = true;
       Sfx.unlock();
+      Music.resume();
       Sfx.select();
       this.cameras.main.fadeOut(250, 230, 216, 191);
       this.time.delayedCall(260, () => this.scene.start('select'));
@@ -1209,19 +1376,20 @@ class PauseScene extends Phaser.Scene {
     const a = makeCatActor(this, GameState.cat, W / 2 + 26, H / 2 + 30);
     a.sit();
     this.add.bitmapText(W / 2 + 26, H / 2 - 16, 'font', CATS[GameState.cat].name).setOrigin(0.5).setTint(0xfff4dc);
-    this.add.bitmapText(W / 2, H / 2 + 38, 'font', 'ESC RESUME   T TITLE').setOrigin(0.5).setTint(0xd9c7a6);
+    this.add.bitmapText(W / 2, H / 2 + 38, 'font', 'ESC RESUME   T TITLE   M MUTE').setOrigin(0.5).setTint(0xd9c7a6);
     const kb = this.input.keyboard;
     this.kEsc = kb.addKey('ESC'); this.kT = kb.addKey('T'); this.kP = kb.addKey('P');
     this.input.on('pointerdown', () => this.resume());
   }
   resume() {
+    Music.duck(false);
     this.scene.resume('play');
     this.scene.stop();
   }
   update() {
     const JD = Phaser.Input.Keyboard.JustDown;
     if (JD(this.kEsc) || JD(this.kP)) this.resume();
-    if (JD(this.kT)) { this.scene.stop('play'); this.scene.start('title'); }
+    if (JD(this.kT)) { Music.duck(false); this.scene.stop('play'); this.scene.start('title'); }
   }
 }
 
@@ -1271,8 +1439,9 @@ class FinaleScene extends Phaser.Scene {
     this.add.bitmapText(lx, 64, 'font', 'ACCOUNTED FOR').setOrigin(0.5).setTint(0x6b4a2a);
     const mice = Object.values(GameState.mice).reduce((a, l) => a + l.length, 0);
     this.add.bitmapText(lx, 84, 'font', 'KIBBLE ' + String(GameState.kibble).padStart(3, '0')).setOrigin(0.5).setTint(0x6b4a2a);
-    this.add.bitmapText(lx, 96, 'font', 'LIVES x' + GameState.lives + (mice ? '  MICE ' + mice : '')).setOrigin(0.5).setTint(0x6b4a2a);
+    this.add.bitmapText(lx, 96, 'font', 'LIVES x' + GameState.lives + (mice ? '  ZS ' + mice : '')).setOrigin(0.5).setTint(0x6b4a2a);
     this.prompt = this.add.bitmapText(W / 2, 170, 'font', 'THANKS FOR PLAYING').setOrigin(0.5).setTint(0x8c6d48);
+    Music.play('home');
     Sfx.win();
     const go = () => { this.scene.start('title'); };
     this.time.delayedCall(1500, () => { this.input.keyboard.once('keydown', go); this.input.once('pointerdown', go); });
@@ -1299,6 +1468,7 @@ class PlayScene extends Phaser.Scene {
     this.muted = this.muted || false;
     this.passives = resolvePassives(GameState.cat);
     this.cameras.main.fadeIn(200, 0, 0, 0);
+    Music.play(Music.themeFor(Levels.get(GameState.level)));
 
     // --- level ---------------------------------------------------------------
     const T = Sprites.TILE;
@@ -1373,7 +1543,7 @@ class PlayScene extends Phaser.Scene {
 
     for (const l of level.lamps) this.add.image(tx(l), tbottom(l), 'lamp').setOrigin(0.5, 1).setDepth(2);
 
-    // ghost mice (Delia only, or Biscuit rolling 'ghost')
+    // sleepy Zs (Delia only, or Biscuit rolling 'ghost'); level char 'G'
     this.seesMice = this.passives.includes('ghost');
     this.miceTotal = level.ghostMice.length;
     this.mice = this.physics.add.group({ allowGravity: false, immovable: true });
@@ -1460,8 +1630,8 @@ class PlayScene extends Phaser.Scene {
     this.keyPause = kb.addKey('ESC');
     this.keyPause2 = kb.addKey('P');
     this.keyAct = kb.addKeys({ b: 'B', x: 'X' });   // B / X double as the action button on keyboards
-    kb.on('keydown', () => { Sfx.unlock(); if (this.touch) this.touch.setVisible(false); });
-    this.input.on('pointerdown', () => { Sfx.unlock(); });
+    kb.on('keydown', () => { Sfx.unlock(); Music.resume(); if (this.touch) this.touch.setVisible(false); });
+    this.input.on('pointerdown', () => { Sfx.unlock(); Music.resume(); });
     if (this.sys.game.device.input.touch) this.touch = new TouchControls(this);
 
     // --- HUD / debug ---------------------------------------------------------------
@@ -1862,7 +2032,7 @@ class PlayScene extends Phaser.Scene {
     if (!list.includes(m.index)) list.push(m.index);
     Sfx.mouse();
     this.hud.refresh();
-    this.popText(m.x, m.y - 8, '*', 0xffffff);
+    this.popText(m.x, m.y - 8, 'ZZZ', 0xc8d8ff);
   }
 
   bonkBlock(tile) {
@@ -1966,7 +2136,7 @@ class PlayScene extends Phaser.Scene {
     p.body.enable = false;
     p.sprite.anims.stop();
     p.sprite.setFrame(p.F.hurt);
-    p.tail.setVisible(false);
+    p.tail.setVisible(false); if (p.halo) p.halo.setVisible(false);
     p.boxSprite.setVisible(false); p.sprite.setVisible(true);
     p.sprite.setAlpha(1);
     this.cameras.main.stopFollow();
@@ -2009,6 +2179,7 @@ class PlayScene extends Phaser.Scene {
   togglePause() {
     if (this.cutscene || this.player.dead) return;
     Sfx.pause();
+    Music.duck(true);
     this.scene.pause();
     this.scene.launch('pause');
   }
@@ -2055,7 +2226,7 @@ class PlayScene extends Phaser.Scene {
         if (cs.t >= 1.8) {
           cs.step = 'hug'; cs.t = 0;
           this.glen.play('glen-hug'); this.em.play('em-hug');
-          p.sprite.setDepth(4.5); p.tail.setDepth(4.4);
+          p.sprite.setDepth(4.5); p.tail.setDepth(4.4); if (p.halo) p.halo.setDepth(4.6);
           p.sprite.y -= 14; p.tail.y -= 14;
           p.autoInput = () => NO_INPUT;
           p.body.enable = false;
@@ -2066,7 +2237,7 @@ class PlayScene extends Phaser.Scene {
           cs.step = 'close'; cs.t = 0;
           this.doorway.setFrame(1).setDepth(20);
           this.glen.setVisible(false); this.em.setVisible(false);
-          p.sprite.setVisible(false); p.tail.setVisible(false);
+          p.sprite.setVisible(false); p.tail.setVisible(false); if (p.halo) p.halo.setVisible(false);
           Sfx.door();
         }
         break;
@@ -2116,7 +2287,7 @@ class PlayScene extends Phaser.Scene {
       'KIBBLE ' + String(GameState.kibble).padStart(3, '0'),
       'LIVES x' + GameState.lives,
     ];
-    if (this.seesMice) lines.push('GHOST MICE ' + (GameState.mice[this.level.id] || []).length + '/' + this.miceTotal);
+    if (this.seesMice) lines.push('ZS CAUGHT ' + (GameState.mice[this.level.id] || []).length + '/' + this.miceTotal);
     const panel = this.add.rectangle(W / 2, H / 2, 160, 24 + lines.length * 16, 0x1a1410, 0.85).setScrollFactor(0).setDepth(3000);
     panel.setStrokeStyle(1, 0xfff4dc, 0.8);
     lines.forEach((s, i) => {
@@ -2137,7 +2308,7 @@ class PlayScene extends Phaser.Scene {
       down: c.down.isDown || w.down.isDown,
       jump: c.space.isDown || (t && t.jump),
       jumpPressed: JustDown(c.space) || (t && t.jumpPressed),
-      run: c.shift.isDown || this.keyAct.b.isDown || this.keyAct.x.isDown || (t && t.action),
+      action: c.shift.isDown || this.keyAct.b.isDown || this.keyAct.x.isDown || (t && t.action),
       actionPressed: JustDown(c.shift) || JustDown(this.keyAct.b) || JustDown(this.keyAct.x) || (t && t.actionPressed),
     };
   }
@@ -2159,7 +2330,7 @@ class PlayScene extends Phaser.Scene {
     if (JustDown(this.keyReset) && !this.cutscene) this.player.respawn();
     if (JustDown(this.keyDebugText)) { this.debugOn = !this.debugOn; this.debugText.setVisible(this.debugOn); }
     if (JustDown(this.keyDebugBodies)) this.toggleBodyDebug();
-    if (JustDown(this.keyMute)) { this.muted = !this.muted; Sfx.setMuted(this.muted); }
+    if (JustDown(this.keyMute)) { this.muted = !this.muted; Sfx.setMuted(this.muted); Music.setMuted(this.muted); }
     if (JustDown(this.keyPause) || JustDown(this.keyPause2)) { this.togglePause(); return; }
 
     const p = this.player;
@@ -2187,9 +2358,12 @@ class PlayScene extends Phaser.Scene {
     // dog chase: the camera auto-scrolls, the dog gains when you dawdle
     if (this.chase) {
       const ch = this.chase, cam = this.cameras.main;
-      if (!ch.started && cx > 40) { ch.started = true; cam.stopFollow(); Sfx.bark(); }
+      if (!ch.started && cx > 40) { ch.started = true; ch.scroll = Math.max(0, cam.scrollX); cam.stopFollow(); Sfx.bark(); }
       if (ch.started) {
-        cam.scrollX = Math.min(cam.scrollX + PHYS.chaseScroll * dt, this.worldW - W);
+        // own float accumulator: the camera rounds scroll to whole pixels each
+        // frame, which would swallow sub-pixel steps at slow scroll speeds
+        ch.scroll = Math.min(ch.scroll + PHYS.chaseScroll * dt, this.worldW - W);
+        cam.scrollX = ch.scroll;
         const dog = ch.dog;
         const target = cam.scrollX - 6;
         const gain = (b.velocity.x < PHYS.chaseScroll * 0.8) ? PHYS.dogSpeed : PHYS.chaseScroll;

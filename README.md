@@ -20,7 +20,7 @@ Then open http://localhost:8000/ in a browser.
 |---|---|---|
 | Move | Arrow keys or WASD | Left / right buttons |
 | Jump (hold for height) | Space | A |
-| Run (hold) / dash or use item (tap) | Shift, B, or X | B |
+| Dash, or use the held item (tap; hold to hide in a box) | Shift, B, or X | B |
 | Crouch / climb curtains | Down / Up | - |
 | Pause | Esc or P | Corner button |
 | Mute | M | - |
@@ -32,7 +32,7 @@ Debug: backtick toggles the physics readout, F2 shows hitboxes.
 | Cat | Passive |
 |---|---|
 | Scottie | Shadow: stand still to vanish from enemies. Double jump. |
-| Delia | Float: hold jump to fall slowly. The only cat who sees ghost mice. |
+| Delia | Float: hold jump to fall slowly. The only cat who can catch Z's. |
 | Marmalade | Bonk: dash through bricks. |
 | Mochi | Yowl: the action button stuns every enemy on screen. |
 | Pickle | Slide: 1.5x speed on kitchen tiles. |
@@ -40,7 +40,7 @@ Debug: backtick toggles the physics readout, F2 shows hitboxes.
 | Deli | Stocked: starts every level with a powerup. |
 | Clover | Roll: crouch-roll under one-tile gaps. |
 
-Collect every ghost mouse in a world as Delia to unlock the bonus level.
+Catch every Z in a world as Delia to unlock the bonus level.
 
 ## Deploy
 
