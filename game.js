@@ -353,6 +353,9 @@ function registerAnims(scene) {
   Sprites.addAnim(scene, 'roomba-hurt', 'roomba', 2, 3, 12, -1);
   Sprites.addAnim(scene, 'ghost-mouse-idle', 'ghost-mouse', 0, 1, 3, -1);
   Sprites.addAnim(scene, 'halo-shimmer', 'halo', 0, 2, 5, -1);
+  Sprites.addAnim(scene, 'deco-fishhouse-blink', 'deco-fishhouse', 0, 2, 1.5, -1);
+  Sprites.addAnim(scene, 'deco-butterfly-flap', 'deco-butterfly', 0, 1, 6, -1);
+  Sprites.addAnim(scene, 'deco-pigeon-peck', 'deco-pigeon', 0, 1, 2, -1);
   const G = Sprites.FRAMES.glen;
   for (const who of ['glen', 'em']) {
     Sprites.addAnim(scene, who + '-wave', who, G.wave0, G.wave1, 2, -1);
@@ -1490,6 +1493,8 @@ class PlayScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, mapW, worldH);
     this.drawBackdrop(mapW, worldH, level.world);
 
+    this.placeScenery(level);
+
     const map = this.make.tilemap({ data: level.grid, tileWidth: TILE, tileHeight: TILE });
     const tileset = map.addTilesetImage('tiles', 'tiles-w' + level.world, TILE, TILE, 0, 0);
     this.map = map;
@@ -1713,6 +1718,62 @@ class PlayScene extends Phaser.Scene {
     if (world === 5) { for (let i = 0; i < 8; i++) { rect(0x3a2a34, i * 44, 150, 3, 30); } rect(0x3a2a34, 0, 150, W, 3); rect(0x3a2a34, 0, 164, W, 2); for (let i = 0; i < 5; i++) { circ(0x8f6a4a, 30 + i * 70, 150, 8); rect(0x6a4a3a, 28 + i * 70, 150, 4, 30); } }
     g.generateTexture(keyNear, W, H);
     g.destroy();
+  }
+
+  /**
+   * Non-interactive scenery behind the tiles (spec §6 theme props, and the
+   * user's cat trees and fish house). Deterministic per level: props go on
+   * floor stretches every 7-12 tiles, wall pieces up on the wall between them.
+   */
+  placeScenery(level) {
+    const SETS = {
+      1: { floor: ['deco-cattree', 'deco-fishhouse', 'deco-bookshelf', 'deco-plant', 'deco-bowls', 'deco-post', 'deco-fishhouse', 'deco-cattree'], wall: ['deco-frame'] },
+      2: { floor: ['deco-flowers', 'deco-gnome', 'deco-flowers', 'deco-hose', 'deco-flowers'], wall: [], air: ['deco-butterfly'] },
+      3: { floor: ['deco-trashcan', 'deco-boxes', 'deco-puddle', 'deco-trashcan'], wall: ['deco-poster'] },
+      4: { floor: ['deco-carrier', 'deco-scale', 'deco-plant', 'deco-carrier'], wall: ['deco-chart'] },
+      5: { floor: ['deco-umbrella', 'deco-plant', 'deco-coffee', 'deco-umbrella'], wall: [], air: ['deco-pigeon'] },
+    };
+    const set = SETS[level.world]; if (!set) return;
+    const rows = Levels.get(level.id).rows;
+    const W = level.width, H = level.height;
+    const at = (x, y) => (x < 0 || x >= W || y < 0 || y >= H) ? '.' : rows[y][x];
+    const solidCh = '#TrUX';
+    let seed = 7 + level.id.charCodeAt(0) * 31 + level.id.charCodeAt(2) * 17;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const anim = { 'deco-fishhouse': 'deco-fishhouse-blink', 'deco-butterfly': 'deco-butterfly-flap', 'deco-pigeon': 'deco-pigeon-peck' };
+    const add = (key, x, y, depth) => {
+      const sp = this.add.sprite(x, y, key).setOrigin(0.5, 1).setDepth(depth);
+      if (anim[key]) sp.play({ key: anim[key], delay: rnd() * 800 });
+      return sp;
+    };
+    let x = 6 + Math.floor(rnd() * 4);
+    let n = 0;
+    while (x < W - 8) {
+      // a floor prop needs solid floor under it and two clear rows above the floor top
+      let fy = -1;
+      for (let y = 5; y < H; y++) if (solidCh.includes(at(x, y)) && !solidCh.includes(at(x, y - 1))) { fy = y; break; }
+      const blockers = '#TrUX=B?^|WN';
+      const clear = fy > 0 && [x - 1, x, x + 1].every(cx => !blockers.includes(at(cx, fy - 1)) && !blockers.includes(at(cx, fy - 2)) && !blockers.includes(at(cx, fy - 3)));
+      if (clear && fy > 0) {
+        const key = set.floor[n % set.floor.length];
+        add(key, x * TILE + 8, this.mapOffsetY + fy * TILE, 1.5 + (n % 3) * 0.1);
+        n++;
+      }
+      // a wall piece up high, between floor props
+      if (set.wall.length && rnd() < 0.5) {
+        const wx = x + 3 + Math.floor(rnd() * 3), wy = 2 + Math.floor(rnd() * 2);
+        if (wx < W - 8 && at(wx, wy) === '.' && at(wx, wy + 1) === '.' && at(wx, wy - 1) === '.') add(set.wall[Math.floor(rnd() * set.wall.length)], wx * TILE + 8, this.mapOffsetY + (wy + 1) * TILE, 1.2);
+      }
+      // something in the air (butterflies, pigeons on the parapet) now and then
+      if (set.air && rnd() < 0.45) {
+        const ax = x + 2 + Math.floor(rnd() * 4), ay = 1 + Math.floor(rnd() * 4);
+        if (ax < W - 8 && at(ax, ay) === '.') {
+          const sp = add(set.air[0], ax * TILE + 8, this.mapOffsetY + (ay + 1) * TILE, 1.4);
+          if (set.air[0] === 'deco-butterfly') this.tweens.add({ targets: sp, y: sp.y - 10, x: sp.x + 12, duration: 1800 + rnd() * 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        }
+      }
+      x += 5 + Math.floor(rnd() * 5);
+    }
   }
 
   // --- tile queries -------------------------------------------------------------
@@ -2015,6 +2076,11 @@ class PlayScene extends Phaser.Scene {
     s.once('animationcomplete', () => s.destroy());
   }
 
+  heart(x, y) {
+    const h = this.add.image(x, y, 'heart', Math.random() < 0.5 ? 0 : 1).setDepth(60);
+    this.tweens.add({ targets: h, y: y - 18, x: x + (Math.random() - 0.5) * 8, alpha: 0, duration: 900, ease: 'Sine.easeOut', onComplete: () => h.destroy() });
+  }
+
   popText(x, y, str, tint = 0x8a5a2b) {
     const t = this.add.bitmapText(x, y, 'font', str).setOrigin(0.5).setDepth(50).setTint(tint);
     this.tweens.add({ targets: t, y: t.y - 12, alpha: 0, duration: 500, onComplete: () => t.destroy() });
@@ -2227,22 +2293,30 @@ class PlayScene extends Phaser.Scene {
         if (cs.t >= 2.0) {
           cs.step = 'pet'; cs.t = 0;
           p.visualDx = 0; p.forceAnim = 'idle'; p.facing = 1;
-          this.glen.play('glen-pet'); this.em.play('em-pet');
+          // they step out of the doorway to either side of the cat and crouch
+          this.tweens.add({ targets: this.em, x: this.doorX - 24, duration: 350, ease: 'Sine.easeInOut', onComplete: () => this.em.play('em-pet') });
+          this.tweens.add({ targets: this.glen, x: this.doorX + 7, duration: 350, ease: 'Sine.easeInOut', onComplete: () => { this.glen.setFlipX(true); this.glen.play('glen-pet'); } });
+          this.heartT = 0.3;
           Sfx.purr();
         }
         break;
       case 'pet':
-        if (cs.t >= 1.8) {
+        this.heartT -= dt; if (this.heartT <= 0) { this.heartT = 0.45; this.heart(p.sprite.x + (Math.random() - 0.5) * 12, p.sprite.y - 22); }
+        if (cs.t >= 2.4) {
           cs.step = 'hug'; cs.t = 0;
           this.glen.play('glen-hug'); this.em.play('em-hug');
+          this.tweens.add({ targets: this.em, x: this.doorX - 16, duration: 300 });
+          this.tweens.add({ targets: this.glen, x: this.doorX + 5, duration: 300 });
           p.sprite.setDepth(4.5); p.tail.setDepth(4.4); if (p.halo) p.halo.setDepth(4.6);
-          p.sprite.y -= 14; p.tail.y -= 14;
+          p.forceAnim = 'sit-loaf';
+          p.sprite.y -= 6; p.tail.y -= 6;
           p.autoInput = () => NO_INPUT;
           p.body.enable = false;
         }
         break;
       case 'hug':
-        if (cs.t >= 1.2) {
+        this.heartT -= dt; if (this.heartT <= 0) { this.heartT = 0.35; this.heart(p.sprite.x + (Math.random() - 0.5) * 20, p.sprite.y - 26); }
+        if (cs.t >= 1.6) {
           cs.step = 'close'; cs.t = 0;
           this.doorway.setFrame(1).setDepth(20);
           this.glen.setVisible(false); this.em.setVisible(false);
