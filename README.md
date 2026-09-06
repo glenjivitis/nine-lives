@@ -18,14 +18,18 @@ Then open http://localhost:8000/ in a browser.
 
 | Action | Keyboard | Touch |
 |---|---|---|
-| Move | Arrow keys or WASD | Left / right buttons |
+| Move | Arrow keys or WASD | D-pad |
 | Jump (hold for height) | Space | A |
 | Dash, or use the held item (tap; hold to hide in a box) | Shift, B, or X | B |
-| Crouch / climb curtains | Down / Up | - |
+| Crouch / climb curtains | Down / Up | D-pad down / up |
 | Pause | Esc or P | Corner button |
 | Mute | M | - |
 
 Debug: backtick toggles the physics readout, F2 shows hitboxes.
+
+## On a phone
+
+Hold the phone sideways. The D-pad reads your thumb anywhere in the lower-left corner, including diagonals, and A/B anywhere near them. Android goes full screen on the first tap. iPhone Safari has no full-screen mode for web pages, so use Share, then Add to Home Screen; the saved app launches without the address bar (`manifest.webmanifest` and the icons in `icons/` describe it).
 
 ## The cats
 

@@ -1132,49 +1132,79 @@ class Hud {
 }
 
 // ---------------------------------------------------------------------------
-// Touch controls (spec §0): left, right, jump, action (+ pause corner).
+// Touch controls (spec §0): a D-pad on the left, B (action) and A (jump) on
+// the right, a pause corner. Input is polled from pointer positions every
+// frame instead of per-button events, so a thumb can slide between
+// directions, hit diagonals, and never leaves a button stuck down. Hit zones
+// are much larger than the drawn shapes: anywhere in the lower-left quarter
+// steers, anywhere near A/B presses the closer one.
 // ---------------------------------------------------------------------------
 class TouchControls {
   constructor(scene) {
     this.scene = scene;
-    this.state = { left: false, right: false, jump: false, action: false, jumpPressed: false, actionPressed: false };
-    this.objects = [];
     scene.input.addPointer(3);
-    const mk = (x, y, w, h, label, key) => {
-      const r = scene.add.rectangle(x, y, w, h, 0x000000, 0.16).setOrigin(0).setScrollFactor(0).setDepth(2000).setInteractive();
-      const t = scene.add.bitmapText(x + w / 2, y + h / 2, 'font', label).setOrigin(0.5).setScrollFactor(0).setDepth(2001).setAlpha(0.6).setTint(0x000000);
-      const down = () => {
-        if (!this.state[key]) {
-          this.state[key] = true;
-          if (key === 'jump') this.state.jumpPressed = true;
-          if (key === 'action') this.state.actionPressed = true;
-        }
-        r.setFillStyle(0x000000, 0.34);
-      };
-      const up = () => { this.state[key] = false; r.setFillStyle(0x000000, 0.16); };
-      r.on('pointerdown', down);
-      r.on('pointerover', p => { if (p.isDown) down(); });
-      r.on('pointerup', up);
-      r.on('pointerout', up);
-      this.objects.push(r, t);
+    this.prev = { jump: false, action: false };
+    this.objects = [];
+    this.visible = true;
+    const add = o => { o.setScrollFactor(0).setDepth(2000); this.objects.push(o); return o; };
+    const INK = 0x000000, DIM = 0.16;
+    // D-pad: four arms around a centre pad
+    const C = this.padC = { x: 56, y: 132 };
+    const T = 26, L = 30;
+    this.pad = {
+      up:    add(scene.add.rectangle(C.x - T / 2, C.y - T / 2 - L, T, L, INK, DIM).setOrigin(0)),
+      down:  add(scene.add.rectangle(C.x - T / 2, C.y + T / 2, T, L, INK, DIM).setOrigin(0)),
+      left:  add(scene.add.rectangle(C.x - T / 2 - L, C.y - T / 2, L, T, INK, DIM).setOrigin(0)),
+      right: add(scene.add.rectangle(C.x + T / 2, C.y - T / 2, L, T, INK, DIM).setOrigin(0)),
     };
-    mk(6, 120, 44, 54, '<', 'left');
-    mk(54, 120, 44, 54, '>', 'right');
-    mk(222, 120, 44, 54, 'B', 'action');
-    mk(270, 120, 44, 54, 'A', 'jump');
+    add(scene.add.rectangle(C.x - T / 2, C.y - T / 2, T, T, INK, DIM).setOrigin(0));
+    const g = add(scene.add.graphics()).setDepth(2001).setAlpha(0.55);
+    g.fillStyle(INK, 1);
+    const a = T / 2 + L - 9, h = 7;   // arrow tip distance from centre, half-width
+    g.fillTriangle(C.x, C.y - a - 5, C.x - h, C.y - a + 5, C.x + h, C.y - a + 5);
+    g.fillTriangle(C.x, C.y + a + 5, C.x - h, C.y + a - 5, C.x + h, C.y + a - 5);
+    g.fillTriangle(C.x - a - 5, C.y, C.x - a + 5, C.y - h, C.x - a + 5, C.y + h);
+    g.fillTriangle(C.x + a + 5, C.y, C.x + a - 5, C.y - h, C.x + a - 5, C.y + h);
+    // A (jump) and B (action)
+    this.btnA = { x: 288, y: 138, r: 22, key: 'jump' };
+    this.btnB = { x: 236, y: 152, r: 18, key: 'action' };
+    for (const b of [this.btnA, this.btnB]) {
+      b.shape = add(scene.add.circle(b.x, b.y, b.r, INK, DIM));
+      add(scene.add.bitmapText(b.x, b.y, 'font', b.key === 'jump' ? 'A' : 'B').setOrigin(0.5).setDepth(2001).setAlpha(0.6).setTint(INK));
+    }
     // pause corner
-    const pr = scene.add.rectangle(W - 18, 2, 16, 14, 0x000000, 0.16).setOrigin(0).setScrollFactor(0).setDepth(2000).setInteractive();
-    const pt = scene.add.bitmapText(W - 10, 9, 'font', 'II').setOrigin(0.5).setScrollFactor(0).setDepth(2001).setAlpha(0.7).setTint(0x000000);
+    const pr = add(scene.add.rectangle(W - 30, 2, 28, 18, INK, DIM).setOrigin(0).setInteractive());
+    add(scene.add.bitmapText(W - 16, 11, 'font', 'II').setOrigin(0.5).setDepth(2001).setAlpha(0.7).setTint(INK));
     pr.on('pointerdown', () => scene.togglePause());
-    this.objects.push(pr, pt);
+    // hidden by keyboard use; any touch brings the pad back
+    scene.input.on('pointerdown', p => { if (!this.visible && p.wasTouch) this.setVisible(true); });
   }
+  /** Read the current touch state; call once per frame. */
   consume() {
-    const s = { ...this.state };
-    this.state.jumpPressed = false;
-    this.state.actionPressed = false;
+    const s = { left: false, right: false, up: false, down: false, jump: false, action: false };
+    for (const p of this.scene.input.manager.pointers) {
+      if (!p.isDown) continue;
+      const x = p.x, y = p.y;
+      if (x < 118 && y > 70) {
+        const dx = x - this.padC.x, dy = y - this.padC.y;
+        if (dx * dx + dy * dy < 36) continue;               // dead centre
+        if (Math.abs(dx) >= Math.abs(dy) * 0.5) { if (dx < 0) s.left = true; else s.right = true; }
+        if (Math.abs(dy) >= Math.abs(dx) * 0.5) { if (dy < 0) s.up = true; else s.down = true; }
+      } else if (x > 200 && y > 96) {
+        const dA = Math.hypot(x - this.btnA.x, y - this.btnA.y) - this.btnA.r;
+        const dB = Math.hypot(x - this.btnB.x, y - this.btnB.y) - this.btnB.r;
+        if (Math.min(dA, dB) <= 14) { if (dA <= dB) s.jump = true; else s.action = true; }
+      }
+    }
+    s.jumpPressed = s.jump && !this.prev.jump;
+    s.actionPressed = s.action && !this.prev.action;
+    this.prev = s;
+    for (const k in this.pad) this.pad[k].setFillStyle(0x000000, s[k] ? 0.34 : 0.16);
+    this.btnA.shape.setFillStyle(0x000000, s.jump ? 0.34 : 0.16);
+    this.btnB.shape.setFillStyle(0x000000, s.action ? 0.34 : 0.16);
     return s;
   }
-  setVisible(v) { for (const o of this.objects) o.setVisible(v); }
+  setVisible(v) { this.visible = v; for (const o of this.objects) o.setVisible(v); }
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1261,9 @@ class TitleScene extends Phaser.Scene {
     this.add.bitmapText(W / 2, 74, 'font', 'A CAT PLATFORMER').setOrigin(0.5).setTint(0x6b4a2a);
     const isTouch = this.sys.game.device.input.touch;
     this.prompt = this.add.bitmapText(W / 2, 112, 'font', isTouch ? 'TAP TO START' : 'PRESS ANY KEY').setOrigin(0.5).setTint(0x3a2414);
+    if (isTouch && !Fullscreen.active() && !Fullscreen.available()) {
+      this.add.bitmapText(W / 2, 130, 'font', 'FULL SCREEN: SHARE THEN ADD TO HOME SCREEN').setOrigin(0.5).setTint(0x8c6d48);
+    }
     this.add.bitmapText(W - 3, 3, 'font', 'BUILD ' + (window.BUILD || '?')).setOrigin(1, 0).setTint(0x6b4a2a);
 
     // cats parade across the bottom
@@ -1249,6 +1282,7 @@ class TitleScene extends Phaser.Scene {
       Sfx.unlock();
       Music.resume();
       Sfx.select();
+      if (isTouch) Fullscreen.request();
       this.cameras.main.fadeOut(250, 230, 216, 191);
       this.time.delayedCall(260, () => this.scene.start('select'));
     };
@@ -1381,7 +1415,7 @@ class PauseScene extends Phaser.Scene {
     const a = makeCatActor(this, GameState.cat, W / 2 + 26, H / 2 + 30);
     a.sit();
     this.add.bitmapText(W / 2 + 26, H / 2 - 16, 'font', CATS[GameState.cat].name).setOrigin(0.5).setTint(0xfff4dc);
-    this.add.bitmapText(W / 2, H / 2 + 38, 'font', 'ESC RESUME   T TITLE   M MUTE').setOrigin(0.5).setTint(0xd9c7a6);
+    this.add.bitmapText(W / 2, H / 2 + 38, 'font', this.sys.game.device.input.touch ? 'TAP TO RESUME' : 'ESC RESUME   T TITLE   M MUTE').setOrigin(0.5).setTint(0xd9c7a6);
     const kb = this.input.keyboard;
     this.kEsc = kb.addKey('ESC'); this.kT = kb.addKey('T'); this.kP = kb.addKey('P');
     this.input.on('pointerdown', () => this.resume());
@@ -2387,8 +2421,8 @@ class PlayScene extends Phaser.Scene {
     return {
       left: c.left.isDown || w.left.isDown || (t && t.left),
       right: c.right.isDown || w.right.isDown || (t && t.right),
-      up: c.up.isDown || w.up.isDown,
-      down: c.down.isDown || w.down.isDown,
+      up: c.up.isDown || w.up.isDown || (t && t.up),
+      down: c.down.isDown || w.down.isDown || (t && t.down),
       jump: c.space.isDown || (t && t.jump),
       jumpPressed: JustDown(c.space) || (t && t.jumpPressed),
       action: c.shift.isDown || this.keyAct.b.isDown || this.keyAct.x.isDown || (t && t.action),
@@ -2528,6 +2562,25 @@ class PlayScene extends Phaser.Scene {
 // ---------------------------------------------------------------------------
 // Boot: integer zoom so every game pixel is an exact NxN block of screen pixels.
 // ---------------------------------------------------------------------------
+// Full screen on phones. Android browsers honour requestFullscreen from a tap;
+// iPhone Safari has no element full screen, so there the answer is Add to Home
+// Screen (the manifest + meta tags make that launch without browser chrome).
+const Fullscreen = {
+  available() { return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled); },
+  active() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement || navigator.standalone
+      || (window.matchMedia && (matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches)));
+  },
+  request() {
+    if (!this.available() || this.active()) return;
+    const el = document.documentElement;
+    const p = el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : el.webkitRequestFullscreen && el.webkitRequestFullscreen();
+    Promise.resolve(p).then(() => {
+      if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(() => {});
+    }).catch(() => {});
+  },
+};
+
 function computeZoom() {
   const z = Math.floor(Math.min(window.innerWidth / W, window.innerHeight / H));
   return Math.max(1, Math.min(MAX_ZOOM, z));
