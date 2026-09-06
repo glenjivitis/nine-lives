@@ -146,7 +146,7 @@ const Sprites = (() => {
     let f = blank(w, h);
     for (const L of layers) {
       if (!L) continue;
-      f = stamp(f, L.art, L.x, L.y, !!L.union);
+      f = stamp(f, L.art, L.x || 0, L.y || 0, !!L.union);
     }
     return f;
   }
@@ -760,6 +760,233 @@ const Sprites = (() => {
   }
 
   // ------------------------------------------------------------------------
+  // Enemies & powerups (phase 2)
+  // ------------------------------------------------------------------------
+  function buildEnemies() {
+    // Roomba 16x9: idle0, idle1 (light blinks), hurt0, hurt1 (flipped, wheels spin)
+    const RB0 = [
+      '....00000000....',
+      '..002222222200..',
+      '.01111111111110.',
+      '0111111311111110',
+      '0111111111111110',
+      '0111111111111110',
+      '0000000000000000',
+      '.55........55...',
+      '.55........55...',
+    ];
+    const RB1 = RB0.map((r, i) => (i === 3 ? '0111111411111110' : r));
+    const RBH0 = [
+      '.55........55...',
+      '.55........55...',
+      '0000000000000000',
+      '0111111111111110',
+      '0111111111111110',
+      '0111111411111110',
+      '.01111111111110.',
+      '..002222222200..',
+      '....00000000....',
+    ];
+    const RBH1 = RBH0.map((r, i) => (i < 2 ? '..55........55..' : r));
+    makeSprite('roomba', [RB0, RB1, RBH0, RBH1], ['#2a2a30', '#6e6e78', '#9a9aa4', '#3ac06a', '#c0303a', '#111116'], { width: 16, height: 16, align: 'bottom' });
+
+    // Cucumber 16x7
+    makeSprite('cucumber', [[
+      '....00000000....',
+      '..0011222211100.',
+      '.011111111111110',
+      '0111111111111110',
+      '0111111111111110',
+      '.01111111111110.',
+      '..000000000000..',
+    ]], ['#1f4d1f', '#3f8f3f', '#6fbf5f', '#dfe7c0'], { width: 16, height: 16, align: 'bottom' });
+
+    // Tuna can 12x9
+    makeSprite('tuna', [[
+      '..00000000..',
+      '.0222222220.',
+      '011111111110',
+      '033333333330',
+      '034433443430',
+      '033333333330',
+      '011111111110',
+      '.0111111110.',
+      '..00000000..',
+    ]], ['#4a4a52', '#c8c8d0', '#e8e8f0', '#2f5fbf', '#7fa8ff']);
+
+    // Food bowl 16x9: empty, full (checkpoint reached)
+    const BOWL_E = [
+      '................',
+      '................',
+      '................',
+      '................',
+      '0000000000000000',
+      '0122222222222210',
+      '.01111111111110.',
+      '..011111111110..',
+      '...0000000000...',
+    ];
+    const BOWL_F = BOWL_E.map((r, i) => (i === 1 ? '......3333......' : i === 2 ? '....3344333 3...'.replace(' ', '3') : i === 3 ? '...344334433 3..'.replace(' ', '3') : r));
+    makeSprite('bowl', [BOWL_E, BOWL_F], ['#5a2a2a', '#c85a5a', '#e88080', '#8a5a2b', '#c48a4a'], { width: 16, height: 16, align: 'bottom' });
+
+    // Brick fragment 4x4
+    makeSprite('brick-bit', [['0000', '0110', '0110', '0000']], ['#6b4a2a', '#c8955a']);
+
+    // Ghost mouse pickup 10x7 (Delia only)
+    makeSprite('ghost-mouse', [
+      ['...0000...', '..011110.0', '.01121100.', '0111111110', '0111111100', '.00000000.', '..0..0....'],
+      ['...0000...', '..011110..', '.011211000', '0111111110', '0111111100', '.00000000.', '..0..0....'],
+    ], ['#dcdcf0', '#ffffff', '#6a6a8a']);
+  }
+
+  // ------------------------------------------------------------------------
+  // Glen & Em (spec §1.4): 32x48 frames, simple front-view figures.
+  // ------------------------------------------------------------------------
+  function rectArt(w, h, fill, outline = '0') {
+    const rows = [];
+    for (let y = 0; y < h; y++) {
+      let s = '';
+      for (let x = 0; x < w; x++) {
+        s += (x === 0 || y === 0 || x === w - 1 || y === h - 1) ? outline : fill;
+      }
+      rows.push(s);
+    }
+    return rows;
+  }
+
+  // shared palette: 0 outline, 1 skin, 2 hair, 3 top, 4 top shade, 5 pants, 6 shoes, 7 face, 8 skin shade
+  const GLEN_PAL = ['#1a1418', '#e8b89a', '#2a1e18', '#3a6fbf', '#2a4f8f', '#3a4a6a', '#222226', '#3a2a2a', '#c8987a'];
+  const EM_PAL = ['#1a1418', '#f0c4a6', '#6b3f22', '#8f5fbf', '#6f3f9f', '#2a2a34', '#222226', '#3a2a2a', '#d0a488'];
+
+  function humanFrames(cfg) {
+    // cfg: { tall, hairLong }
+    const H = 48, Wd = 32;
+    const headW = 10, headH = 11;
+    const torsoH = cfg.tall ? 15 : 12;
+    const legH = cfg.tall ? 14 : 11;
+    const hair = cfg.hairLong
+      ? ['.00000000000.', '0222222222220', '0222222222220', '0222222222220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '.00.......00.']
+      : ['..00000000..', '.0222222220.', '0222222222220'.slice(0, 12), '0222222222220'.slice(0, 12)];
+
+    function head(x, y) {
+      const layers = [];
+      const face = [
+        '..000000..',
+        '.01111110.',
+        '0111111110',
+        '0111111110',
+        '0171111710',
+        '0111111110',
+        '0111181110',
+        '0111111110',
+        '.01111110.',
+        '.00111100.',
+        '...0000...',
+      ];
+      if (cfg.hairLong) {
+        layers.push({ art: hair, x: x - 1, y: y - 1 });
+        layers.push({ art: face, x, y, union: true });
+      } else {
+        layers.push({ art: face, x, y });
+        layers.push({ art: hair, x: x - 1, y: y - 1, union: false });
+      }
+      return layers;
+    }
+
+    function standing(armPose) {
+      const baseY = H - 1;
+      const legsY = baseY - legH - 2;
+      const torsoY = legsY - torsoH + 1;
+      const headY = torsoY - headH + 2;
+      const cx = 16;
+      const L = [];
+      // legs
+      L.push({ art: rectArt(6, legH + 1, '5'), x: cx - 7, y: legsY });
+      L.push({ art: rectArt(6, legH + 1, '5'), x: cx + 1, y: legsY });
+      L.push({ art: rectArt(7, 3, '6'), x: cx - 8, y: baseY - 2 });
+      L.push({ art: rectArt(7, 3, '6'), x: cx + 1, y: baseY - 2 });
+      // torso
+      L.push({ art: rectArt(16, torsoH, '3'), x: cx - 8, y: torsoY });
+      L.push({ art: rectArt(6, 2, '4', '4'), x: cx - 3, y: torsoY + 1 });
+      // arms
+      if (armPose === 'wave0' || armPose === 'wave1') {
+        L.push({ art: rectArt(4, 10, '3'), x: cx - 11, y: torsoY + 1 });               // left arm down (sleeve)
+        L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 10 });               // hand
+        const up = armPose === 'wave0' ? 0 : 2;
+        L.push({ art: rectArt(4, 8, '3'), x: cx + 8, y: torsoY - 6 + up });             // right arm up
+        L.push({ art: rectArt(4, 5, '1'), x: cx + 8 + (armPose === 'wave1' ? 2 : 0), y: torsoY - 10 + up }); // hand
+      } else {
+        L.push({ art: rectArt(4, 10, '3'), x: cx - 11, y: torsoY + 1 });
+        L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 10 });
+        L.push({ art: rectArt(4, 10, '3'), x: cx + 8, y: torsoY + 1 });
+        L.push({ art: rectArt(4, 4, '1'), x: cx + 8, y: torsoY + 10 });
+      }
+      L.push(...head(cx - 5, headY));
+      return compose(Wd, H, L);
+    }
+
+    function crouched(reach) {
+      // reach: 0..2 hand offset; 'hug' for both arms forward
+      const baseY = H - 1;
+      const legsY = baseY - 7;
+      const torsoY = legsY - torsoH + 2;
+      const headY = torsoY - headH + 2;
+      const cx = 16;
+      const L = [];
+      L.push({ art: rectArt(9, 8, '5'), x: cx - 9, y: legsY });
+      L.push({ art: rectArt(9, 8, '5'), x: cx + 1, y: legsY });
+      L.push({ art: rectArt(8, 3, '6'), x: cx - 10, y: baseY - 2 });
+      L.push({ art: rectArt(8, 3, '6'), x: cx + 3, y: baseY - 2 });
+      L.push({ art: rectArt(16, torsoH, '3'), x: cx - 8, y: torsoY });
+      L.push({ art: rectArt(6, 2, '4', '4'), x: cx - 3, y: torsoY + 1 });
+      if (reach === 'hug') {
+        L.push({ art: rectArt(10, 4, '3'), x: cx - 14, y: torsoY + 6 });
+        L.push({ art: rectArt(10, 4, '3'), x: cx + 5, y: torsoY + 6 });
+        L.push({ art: rectArt(4, 4, '1'), x: cx - 17, y: torsoY + 8 });
+        L.push({ art: rectArt(4, 4, '1'), x: cx + 14, y: torsoY + 8 });
+      } else {
+        L.push({ art: rectArt(4, 8, '3'), x: cx - 11, y: torsoY + 2 });
+        L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 9 });
+        // petting arm reaches down-forward
+        L.push({ art: rectArt(4, 10 + reach, '3'), x: cx + 9, y: torsoY + 2 });
+        L.push({ art: rectArt(5, 4, '1'), x: cx + 9, y: torsoY + 11 + reach });
+      }
+      L.push(...head(cx - 5, headY));
+      return compose(Wd, H, L);
+    }
+
+    return {
+      frames: [standing('wave0'), standing('wave1'), crouched(0), crouched(1), crouched(2), crouched('hug'), crouched('hug')],
+      map: { wave0: 0, wave1: 1, pet0: 2, pet1: 3, pet2: 4, hug0: 5, hug1: 6 },
+    };
+  }
+
+  function buildHumans() {
+    const glen = humanFrames({ tall: true, hairLong: false });
+    makeSprite('glen', glen.frames, GLEN_PAL);
+    const em = humanFrames({ tall: false, hairLong: true });
+    // Em's hug frame 1: shift slightly so the pair "rocks"
+    makeSprite('em', em.frames, EM_PAL);
+    FRAMES.glen = glen.map;
+    FRAMES.em = em.map;
+
+    // Doorway 32x48: open (dark interior) and closed door
+    const open = compose(32, 48, [
+      { art: rectArt(32, 48, '1', '0') },
+      { art: rectArt(28, 46, '2', '2'), x: 2, y: 2 },
+      { art: rectArt(24, 44, '3', '3'), x: 4, y: 4 },
+    ]);
+    const closed = compose(32, 48, [
+      { art: rectArt(32, 48, '1', '0') },
+      { art: rectArt(28, 46, '4', '0'), x: 2, y: 2 },
+      { art: rectArt(18, 14, '4', '5'), x: 7, y: 7 },
+      { art: rectArt(18, 18, '4', '5'), x: 7, y: 25 },
+      { art: ['66', '66'], x: 23, y: 24 },
+    ]);
+    makeSprite('doorway', [open, closed], ['#2a1a10', '#c9c1b0', '#8a8078', '#3a3448', '#7a4a24', '#5a3418', '#e8c14a']);
+  }
+
+  // ------------------------------------------------------------------------
   const FRAMES = {};   // FRAMES.scottie = { idle0: 0, ... }
 
   function buildAll() {
@@ -768,6 +995,8 @@ const Sprites = (() => {
     buildTiles();
     buildProps();
     buildFont();
+    buildEnemies();
+    buildHumans();
     FRAMES.scottie = buildScottie();
   }
 
