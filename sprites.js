@@ -1516,19 +1516,52 @@ const Sprites = (() => {
     return rows;
   }
 
-  // shared palette: 0 outline, 1 skin, 2 hair, 3 top, 4 top shade, 5 pants, 6 shoes, 7 face, 8 skin shade
-  const GLEN_PAL = ['#1a1418', '#e8b89a', '#2a1e18', '#3a6fbf', '#2a4f8f', '#3a4a6a', '#222226', '#3a2a2a', '#c8987a'];
-  const EM_PAL = ['#1a1418', '#f0c4a6', '#6b3f22', '#8f5fbf', '#6f3f9f', '#2a2a34', '#222226', '#3a2a2a', '#d0a488'];
+  // shared palette: 0 outline, 1 skin, 2 hair, 3 top, 4 top accent, 5 pants, 6 shoes, 7 face dark, 8 skin shade, 9 eyes
+  // Drawn from reference/Glen and Em.JPEG. Glen: mid-brown swept hair, fair skin, orange-and-white striped
+  // short-sleeve shirt, sky-blue eyes. Em: long dark wavy hair, fair freckled skin, red top with white flowers,
+  // pale blue-green eyes.
+  const GLEN_PAL = ['#1a1418', '#f0c8aa', '#5c3b24', '#f6e9dc', '#e8874a', '#3a4a6a', '#222226', '#3a2a2a', '#d4a486', '#4fb8f0'];
+  const EM_PAL = ['#1a1418', '#f2c9ad', '#2e1c14', '#d8303a', '#f8eef0', '#2a2a34', '#222226', '#3a2a2a', '#d0a488', '#a9c9c5'];
+
+  /** Row of width w with [start, end, char] segments; everything else transparent. */
+  function band(w, segs) { const r = Array(w).fill('.'); for (const [s0, e, c] of segs) for (let i = s0; i <= e; i++) r[i] = c; return r.join(''); }
 
   function humanFrames(cfg) {
-    // cfg: { tall, hairLong }
+    // cfg: { tall, hairLong, sleeves: 'short' | 'none' | 'long', stripes, flowers, freckles }
     const H = 48, Wd = 32;
     const headW = 10, headH = 11;
     const torsoH = cfg.tall ? 15 : 12;
     const legH = cfg.tall ? 14 : 11;
-    const hair = cfg.hairLong
-      ? ['.00000000000.', '0222222222220', '0222222222220', '0222222222220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '022.......220', '.00.......00.']
-      : ['..00000000..', '.0222222220.', '0222222222220'.slice(0, 12), '0222222222220'.slice(0, 12)];
+    let hair, hairX, hairY;
+    if (cfg.hairLong) {
+      // 16 wide, face occupies columns 3..12; hair frames the face, then spills over the shoulders in waves
+      const side = (l0, l1, r0, r1) => band(16, [[l0 - 1, l0 - 1, '0'], [l0, l1, '2'], [r0, r1, '2'], [r1 + 1, r1 + 1, '0']]);
+      hair = [
+        band(16, [[4, 11, '0']]),
+        band(16, [[3, 3, '0'], [4, 11, '2'], [12, 12, '0']]),
+        band(16, [[2, 2, '0'], [3, 12, '2'], [13, 13, '0']]),
+        band(16, [[1, 1, '0'], [2, 12, '2'], [13, 13, '2'], [14, 14, '0']]),
+        side(2, 3, 12, 13), side(2, 3, 12, 13), side(1, 3, 12, 14), side(1, 3, 12, 14),
+        side(2, 3, 12, 13), side(1, 3, 12, 14), side(1, 3, 12, 14), side(2, 3, 12, 13),
+        side(1, 4, 11, 14), side(1, 4, 11, 14), side(1, 5, 10, 14), side(1, 5, 10, 14),
+        side(2, 5, 10, 13), side(1, 5, 10, 14), side(1, 4, 11, 14), side(2, 4, 11, 13),
+        band(16, [[2, 4, '0'], [11, 13, '0']]),
+      ];
+      hairX = -3; hairY = -1;
+    } else {
+      // 12 wide, face at columns 1..10; full on top, swept across the forehead, down over the ears
+      hair = [
+        '...00000000.',
+        '.0022222220.',
+        '022222222220',
+        '022222222220',
+        '0222222..220',
+        '022.......20',
+        '022.......20',
+        '.0.........0',
+      ];
+      hairX = -1; hairY = -1;
+    }
 
     function head(x, y) {
       const layers = [];
@@ -1537,23 +1570,37 @@ const Sprites = (() => {
         '.01111110.',
         '0111111110',
         '0111111110',
+        '0191111910',
         '0171111710',
-        '0111111110',
-        '0111181110',
+        cfg.freckles ? '0181181810' : '0111181110',
         '0111111110',
         '.01111110.',
         '.00111100.',
         '...0000...',
       ];
       if (cfg.hairLong) {
-        layers.push({ art: hair, x: x - 1, y: y - 1 });
+        layers.push({ art: hair, x: x + hairX, y: y + hairY });
         layers.push({ art: face, x, y, union: true });
       } else {
         layers.push({ art: face, x, y });
-        layers.push({ art: hair, x: x - 1, y: y - 1, union: false });
+        layers.push({ art: hair, x: x + hairX, y: y + hairY, union: false });
       }
       return layers;
     }
+
+    /** Torso block with the shirt pattern. */
+    function torso(w, h) {
+      const r = rectArt(w, h, '3').map(row => row.split(''));
+      if (cfg.stripes) for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) if (x % 2 === 0) r[y][x] = '4';
+      if (cfg.flowers) for (const [x, y] of [[3, 3], [10, 2], [6, 6], [12, 7], [2, 9], [8, 10]]) if (y < h - 1) { r[y][x] = '4'; if (x + 1 < w - 1) r[y][x + 1] = '4'; if (y + 1 < h - 1) r[y + 1][x] = '4'; }
+      return r.map(row => row.join(''));
+    }
+    /** Vertical arm: sleeve rows in shirt colour, the rest skin. */
+    function arm(h) {
+      const sleeve = cfg.sleeves === 'long' ? h : cfg.sleeves === 'short' ? 4 : 0;
+      return rectArt(4, h, '3').map((row, y) => y < sleeve ? row : row.replace(/3/g, '1'));
+    }
+    const fore = cfg.sleeves === 'long' ? '3' : '1';   // horizontal forearm colour
 
     function standing(armPose) {
       const baseY = H - 1;
@@ -1568,19 +1615,19 @@ const Sprites = (() => {
       L.push({ art: rectArt(7, 3, '6'), x: cx - 8, y: baseY - 2 });
       L.push({ art: rectArt(7, 3, '6'), x: cx + 1, y: baseY - 2 });
       // torso
-      L.push({ art: rectArt(16, torsoH, '3'), x: cx - 8, y: torsoY });
-      L.push({ art: rectArt(6, 2, '4', '4'), x: cx - 3, y: torsoY + 1 });
+      L.push({ art: torso(16, torsoH), x: cx - 8, y: torsoY });
+      if (cfg.stripes) L.push({ art: ['4....4', '.4..4.', '..44..'], x: cx - 3, y: torsoY + 1 });   // collar
       // arms
       if (armPose === 'wave0' || armPose === 'wave1') {
-        L.push({ art: rectArt(4, 10, '3'), x: cx - 11, y: torsoY + 1 });               // left arm down (sleeve)
-        L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 10 });               // hand
+        L.push({ art: arm(10), x: cx - 11, y: torsoY + 1 });               // left arm down
+        L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 10 });    // hand
         const up = armPose === 'wave0' ? 0 : 2;
-        L.push({ art: rectArt(4, 8, '3'), x: cx + 8, y: torsoY - 6 + up });             // right arm up
+        L.push({ art: arm(8), x: cx + 8, y: torsoY - 6 + up });             // right arm up
         L.push({ art: rectArt(4, 5, '1'), x: cx + 8 + (armPose === 'wave1' ? 2 : 0), y: torsoY - 10 + up }); // hand
       } else {
-        L.push({ art: rectArt(4, 10, '3'), x: cx - 11, y: torsoY + 1 });
+        L.push({ art: arm(10), x: cx - 11, y: torsoY + 1 });
         L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 10 });
-        L.push({ art: rectArt(4, 10, '3'), x: cx + 8, y: torsoY + 1 });
+        L.push({ art: arm(10), x: cx + 8, y: torsoY + 1 });
         L.push({ art: rectArt(4, 4, '1'), x: cx + 8, y: torsoY + 10 });
       }
       L.push(...head(cx - 5, headY));
@@ -1599,23 +1646,23 @@ const Sprites = (() => {
       L.push({ art: rectArt(9, 8, '5'), x: cx + 1, y: legsY });
       L.push({ art: rectArt(8, 3, '6'), x: cx - 10, y: baseY - 2 });
       L.push({ art: rectArt(8, 3, '6'), x: cx + 3, y: baseY - 2 });
-      L.push({ art: rectArt(16, torsoH, '3'), x: cx - 8, y: torsoY });
-      L.push({ art: rectArt(6, 2, '4', '4'), x: cx - 3, y: torsoY + 1 });
+      L.push({ art: torso(16, torsoH), x: cx - 8, y: torsoY });
+      if (cfg.stripes) L.push({ art: ['4....4', '.4..4.', '..44..'], x: cx - 3, y: torsoY + 1 });
       if (reach === 'hug') {
         // both arms wrap forward and low, around a cat sitting in front
-        L.push({ art: rectArt(4, 6, '3'), x: cx - 11, y: baseY - 22 });
-        L.push({ art: rectArt(12, 4, '3'), x: cx - 11, y: baseY - 17 });
-        L.push({ art: rectArt(4, 6, '3'), x: cx + 8, y: baseY - 22 });
-        L.push({ art: rectArt(12, 4, '3'), x: cx + 1, y: baseY - 17 });
+        L.push({ art: arm(6), x: cx - 11, y: baseY - 22 });
+        L.push({ art: rectArt(12, 4, fore), x: cx - 11, y: baseY - 17 });
+        L.push({ art: arm(6), x: cx + 8, y: baseY - 22 });
+        L.push({ art: rectArt(12, 4, fore), x: cx + 1, y: baseY - 17 });
         L.push({ art: rectArt(5, 4, '1'), x: cx - 2, y: baseY - 16 });
         L.push({ art: rectArt(5, 4, '1'), x: cx + 12, y: baseY - 16 });
       } else {
-        L.push({ art: rectArt(4, 8, '3'), x: cx - 11, y: torsoY + 2 });
+        L.push({ art: arm(8), x: cx - 11, y: torsoY + 2 });
         L.push({ art: rectArt(4, 4, '1'), x: cx - 11, y: torsoY + 9 });
         // petting arm: out to the side at cat-head height, hand patting up and down
         const dy = [0, -2, 1][reach] || 0;
-        L.push({ art: rectArt(4, 5, '3'), x: cx + 8, y: torsoY + 2 });
-        L.push({ art: rectArt(11, 4, '3'), x: cx + 8, y: baseY - 17 + dy });
+        L.push({ art: arm(5), x: cx + 8, y: torsoY + 2 });
+        L.push({ art: rectArt(11, 4, fore), x: cx + 8, y: baseY - 17 + dy });
         L.push({ art: rectArt(5, 4, '1'), x: cx + 18, y: baseY - 17 + dy });
       }
       L.push(...head(cx - 5, headY));
@@ -1629,9 +1676,9 @@ const Sprites = (() => {
   }
 
   function buildHumans() {
-    const glen = humanFrames({ tall: true, hairLong: false });
+    const glen = humanFrames({ tall: true, hairLong: false, sleeves: 'short', stripes: true });
     makeSprite('glen', glen.frames, GLEN_PAL);
-    const em = humanFrames({ tall: false, hairLong: true });
+    const em = humanFrames({ tall: false, hairLong: true, sleeves: 'none', flowers: true, freckles: true });
     // Em's hug frame 1: shift slightly so the pair "rocks"
     makeSprite('em', em.frames, EM_PAL);
     FRAMES.glen = glen.map;
