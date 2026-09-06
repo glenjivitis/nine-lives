@@ -1091,7 +1091,9 @@ class Hud {
     const d = 1000;
     // translucent backing so the HUD reads on night and clinic backdrops too
     scene.add.rectangle(2, 2, 122, 16, 0xfff4dc, 0.55).setOrigin(0).setScrollFactor(0).setDepth(d - 1);
-    if (showMice) scene.add.rectangle(W - 44, 2, 42, 12, 0xfff4dc, 0.55).setOrigin(0).setScrollFactor(0).setDepth(d - 1);
+    // the Z counter sits at the right edge, or left of the touch pause button
+    const R = scene.sys.game.device.input.touch ? W - 32 : W;
+    if (showMice) scene.add.rectangle(R - 44, 2, 42, 12, 0xfff4dc, 0.55).setOrigin(0).setScrollFactor(0).setDepth(d - 1);
     this.lifeIcon = scene.add.image(4, 4, 'icon-life').setOrigin(0).setScrollFactor(0).setDepth(d);
     this.lifeText = this.text(14, 4);
     this.kibbleIcon = scene.add.image(36, 5, 'kibble').setOrigin(0).setScrollFactor(0).setDepth(d);
@@ -1102,8 +1104,8 @@ class Hud {
     this.itemIcon = scene.add.image(97, 9, 'yarn').setScrollFactor(0).setDepth(d + 1).setVisible(false);
     this.itemText = this.text(105, 4);
     if (showMice) {
-      this.miceIcon = scene.add.image(W - 40, 4, 'icon-mouse').setOrigin(0).setScrollFactor(0).setDepth(d);
-      this.miceText = this.text(W - 30, 4);
+      this.miceIcon = scene.add.image(R - 40, 4, 'icon-mouse').setOrigin(0).setScrollFactor(0).setDepth(d);
+      this.miceText = this.text(R - 30, 4);
     }
     this.refresh();
   }
