@@ -353,7 +353,7 @@ function registerAnims(scene) {
   Sprites.addAnim(scene, 'roomba-hurt', 'roomba', 2, 3, 12, -1);
   Sprites.addAnim(scene, 'ghost-mouse-idle', 'ghost-mouse', 0, 1, 3, -1);
   Sprites.addAnim(scene, 'halo-shimmer', 'halo', 0, 2, 5, -1);
-  Sprites.addAnim(scene, 'deco-fishhouse-blink', 'deco-fishhouse', 0, 2, 1.5, -1);
+  Sprites.addAnim(scene, 'deco-fishhouse-blink', 'deco-fishhouse', 0, 5, 3, -1);
   Sprites.addAnim(scene, 'deco-butterfly-flap', 'deco-butterfly', 0, 1, 6, -1);
   Sprites.addAnim(scene, 'deco-pigeon-peck', 'deco-pigeon', 0, 1, 2, -1);
   const G = Sprites.FRAMES.glen;
@@ -1758,12 +1758,12 @@ class PlayScene extends Phaser.Scene {
 
   /**
    * Non-interactive scenery behind the tiles (spec §6 theme props, and the
-   * user's cat trees and fish house). Deterministic per level: props go on
+   * user's cat trees, fishy and couch). Deterministic per level: props go on
    * floor stretches every 7-12 tiles, wall pieces up on the wall between them.
    */
   placeScenery(level) {
     const SETS = {
-      1: { floor: ['deco-cattree', 'deco-fishhouse', 'deco-bookshelf', 'deco-plant', 'deco-bowls', 'deco-post', 'deco-fishhouse', 'deco-cattree'], wall: ['deco-frame'] },
+      1: { floor: ['deco-cattree', 'deco-fishhouse', 'deco-couch', 'deco-bookshelf', 'deco-plant', 'deco-bowls', 'deco-post', 'deco-fishhouse', 'deco-couch', 'deco-cattree'], wall: ['deco-frame'] },
       2: { floor: ['deco-flowers', 'deco-gnome', 'deco-flowers', 'deco-hose', 'deco-flowers'], wall: [], air: ['deco-butterfly'] },
       3: { floor: ['deco-trashcan', 'deco-boxes', 'deco-puddle', 'deco-trashcan'], wall: ['deco-poster'] },
       4: { floor: ['deco-carrier', 'deco-scale', 'deco-plant', 'deco-carrier'], wall: ['deco-chart'] },
